@@ -9,16 +9,15 @@ import django
 django.setup()
 
 from papers.models import Paper, ExperimentRecord
-from services.marker_service import marker_service
-from services.parser_service import parser_service
+from services.pdf_service import pdf_service
 from services.llm_service import llm_service
 
 
 def parse_paper_task(paper_id: int):
     """
     异步解析论文任务
-    1. PDF -> Markdown (Marker)
-    2. Markdown -> JSON (LLM)
+    1. PDF -> 文本 (pypdf)
+    2. 文本 -> JSON (LLM)
     3. 写入 ExperimentRecord
     """
     try:
@@ -28,17 +27,19 @@ def parse_paper_task(paper_id: int):
 
         pdf_path = paper.local_pdf.path
 
-        md_content = marker_service.convert_pdf_to_markdown(pdf_path)
-        paper.raw_markdown = md_content
+        # 提取文本
+        text_content = pdf_service.extract_text_from_pdf(pdf_path)
+        paper.raw_markdown = text_content
 
-        table_text = parser_service.extract_tables_for_llm(md_content)
-        if not table_text:
+        if not text_content or len(text_content.strip()) < 100:
             paper.status = Paper.Status.FAILED
-            paper.error_message = "未找到任何表格"
+            paper.error_message = "PDF 文本提取失败或内容过少"
             paper.save()
             return
 
-        extracted_data = llm_service.extract_table_data(table_text)
+        # 直接传原始文本给 LLM，让它自己识别表格
+        extracted_data = llm_service.extract_table_data(text_content)
+
         if not extracted_data:
             paper.status = Paper.Status.FAILED
             paper.error_message = "LLM 未能提取到有效数据"

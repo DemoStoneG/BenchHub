@@ -4,34 +4,37 @@ from django.conf import settings
 
 
 class LLMService:
-    """MiniMax M2.7 API 调用封装"""
+    """MiniMax M2 API 调用封装"""
 
     def __init__(self):
         self.api_key = settings.MINIMAX_API_KEY
         self.endpoint = settings.MINIMAX_API_ENDPOINT
-        self.model = "MiniMax-M2.7-32K"
+        self.model = "MiniMax-M2"
 
-    def extract_table_data(self, markdown_content: str) -> list:
+    def extract_table_data(self, text_content: str) -> list:
         """
-        调用 LLM 从 Markdown 表格内容中提取实验数据
+        调用 LLM 从论文文本中提取实验数据表格
         返回: [{"model": "", "dataset": "", "metric": "", "value": 0.0}, ...]
         """
-        prompt = f"""你是一个学术论文数据提取助手。请从以下 Markdown 格式的论文表格中提取实验数据。
+        prompt = """你是一个学术论文实验数据提取助手。请从以下论文文本中提取主要实验结果数据。
 
-要求：
-1. 只提取主要实验结果表格（通常在实验章节）
-2. 识别表格中的 Model/Dataset/Metric/Value 列
-3. dataset 归一化为标准名称（如 MMLU, GSM8K, ImageNet 等）
-4. metric 归一化为标准缩写（如 Acc, F1, BLEU 等）
+任务：
+1. 找到表格中主要的模型对比数据（忽略 "Source Only" 基线行，优先提取SeqDG、RNA、CIR、TA3N等主要方法）
+2. 提取 Model、Dataset、Metric、Value 四个字段
+3. dataset 归一化（如 EPIC-KITCHENS-100 -> EPIC-KITCHENS, MMLU, GSM8K 等）
+4. metric 归一化（如 Top-1 Accuracy -> Acc, Top-5 Accuracy -> Acc@5, Mean Class accuracy -> mAcc 等）
+5. 最多返回 20 条记录（优先保留主要模型的 Action Acc 指标）
 
-只输出 JSON 数组格式，不要输出任何其他内容。
-如果表格数据不完整或无法提取，返回空数组 []。
+只输出 JSON 数组，不要输出任何解释。
+格式：[{"model": "模型名", "dataset": "数据集名", "metric": "指标名", "value": 数值}]
+如果找不到数据，返回空数组 []。
 
-Markdown 内容：
-{markdown_content}
+论文文本：
+""" + text_content + """
 
-输出格式示例：
-[{{"model": "GPT-4", "dataset": "MMLU", "metric": "Acc", "value": 86.4}}]
+注意：
+- 同一表格中可能有多个指标（Verb, Noun, Action），优先提取 Action 指标
+- 数值可能是百分比（如 46.7 表示 46.7%）
 """
 
         payload = {
@@ -67,7 +70,18 @@ Markdown 内容：
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            raise Exception(f"LLM 返回格式错误，无法解析 JSON: {content}")
+            # 尝试修复截断的 JSON
+            try:
+                # 找到最后一个完整的对象
+                last_brace = content.rfind('}')
+                last_bracket = content.rfind(']')
+                end = max(last_brace, last_bracket)
+                if end > 0:
+                    fixed = content[:end+1]
+                    return json.loads(fixed)
+            except:
+                pass
+            raise Exception(f"LLM 返回格式错误，无法解析 JSON: {content[:500]}")
 
 
 llm_service = LLMService()

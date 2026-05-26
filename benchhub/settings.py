@@ -123,8 +123,8 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # MiniMax LLM API Config
-MINIMAX_API_KEY = 'sk-api-v9s6bMxW_HF7zA8hGzsfwHFUSa9cuSPwqcwgUN3T5cWJZWQx8odZsdqbbRTVVRBXk-FBpsR6o9HVAbHD9yBafSqBBA6IqySX-KLyer8F7xEb1gqXpCaH7tw'
-MINIMAX_API_ENDPOINT = 'https://api.minimaxi.com/anthropic'
+MINIMAX_API_KEY = 'sk-cp-46EX0RUzHtsOAbX9g-boWdSARiQe_WbuooTAGCKFQD0G9IgiFgBpNSKvjOyl_PpEEssxOdxlqr5tGzScJoop5ccZJSE7fvAineVH8brgWJ4B6pSav5_eI7M'
+MINIMAX_API_ENDPOINT = 'https://api.minimaxi.com/v1/text/chatcompletion_v2'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
