@@ -40,6 +40,8 @@ def parse_paper_task(paper_id: int):
         # 直接传原始文本给 LLM，让它自己识别表格
         extracted_data = llm_service.extract_table_data(text_content)
 
+        print(f"DEBUG: extracted {len(extracted_data)} records")
+
         if not extracted_data:
             paper.status = Paper.Status.FAILED
             paper.error_message = "LLM 未能提取到有效数据"

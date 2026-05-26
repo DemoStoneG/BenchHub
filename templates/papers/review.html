@@ -15,139 +15,218 @@
     <p class="text-sm text-gray-500 mt-1">上传于 {{ paper.created_at|date:"Y-m-d H:i" }}</p>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <!-- 左侧: PDF 预览 -->
-    <div class="bg-white shadow rounded-lg p-4">
-        <h2 class="text-lg font-medium text-gray-900 mb-4">PDF 预览</h2>
-        {% if paper.local_pdf %}
-        <iframe src="{{ paper.local_pdf.url }}" class="w-full h-[600px] rounded border"></iframe>
-        {% else %}
-        <p class="text-gray-500">暂无 PDF 文件</p>
-        {% endif %}
-    </div>
-
-    <!-- 右侧: 可编辑表格 -->
-    <div class="bg-white shadow rounded-lg p-4" x-data="reviewEditor()">
-        <div class="flex justify-between items-center mb-4">
-            <h2 class="text-lg font-medium text-gray-900">实验数据</h2>
-            <button @click="addRow()" class="text-sm bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">
-                + 添加行
-            </button>
+<div x-data="paperReviewApp()">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 左侧: PDF 预览 -->
+        <div class="bg-white shadow rounded-lg p-4">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-medium text-gray-900">PDF 预览</h2>
+                <div class="flex items-center space-x-2">
+                    <button @click="prevPage()" :disabled="pageNum <= 1" class="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50">上一页</button>
+                    <span class="text-sm"><span x-text="pageNum"></span> / <span x-text="totalPages"></span></span>
+                    <button @click="nextPage()" :disabled="pageNum >= totalPages" class="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50">下一页</button>
+                </div>
+            </div>
+            {% if paper.local_pdf %}
+            <div id="pdf-container" class="overflow-auto" style="height: 600px;">
+                <canvas id="pdf-canvas" class="mx-auto"></canvas>
+            </div>
+            <!-- 备用: object 标签使用专用PDF视图 -->
+            <object id="pdf-object" data="/paper/{{ paper.id }}/pdf/" type="application/pdf" style="width: 100%; height: 600px; display: none;">
+                <p>PDF 无法在此浏览器中显示，请 <a href="/paper/{{ paper.id }}/pdf/" target="_blank">下载查看</a></p>
+            </object>
+            {% else %}
+            <p class="text-gray-500">暂无 PDF 文件</p>
+            {% endif %}
         </div>
 
-        {% if records %}
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 text-sm">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Model</th>
-                        <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Dataset</th>
-                        <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Metric</th>
-                        <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Value</th>
-                        <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">已校验</th>
-                        <th class="px-2 py-1"></th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for record in records %}
-                    <tr>
-                        <td class="px-2 py-1">
-                            <input type="text" value="{{ record.model_name }}"
-                                @change="updateRecord({{ record.id }}, 'model_name', $event.target.value)"
-                                class="w-full border rounded px-2 py-1 text-sm">
-                        </td>
-                        <td class="px-2 py-1">
-                            <input type="text" value="{{ record.dataset }}"
-                                @change="updateRecord({{ record.id }}, 'dataset', $event.target.value)"
-                                class="w-full border rounded px-2 py-1 text-sm">
-                        </td>
-                        <td class="px-2 py-1">
-                            <input type="text" value="{{ record.metric }}"
-                                @change="updateRecord({{ record.id }}, 'metric', $event.target.value)"
-                                class="w-full border rounded px-2 py-1 text-sm">
-                        </td>
-                        <td class="px-2 py-1">
-                            <input type="number" step="0.01" value="{{ record.value }}"
-                                @change="updateRecord({{ record.id }}, 'value', $event.target.value)"
-                                class="w-full border rounded px-2 py-1 text-sm">
-                        </td>
-                        <td class="px-2 py-1 text-center">
-                            <input type="checkbox" {% if record.is_verified %}checked{% endif %}
-                                @change="updateRecord({{ record.id }}, 'is_verified', $event.target.checked)"
-                                class="rounded">
-                        </td>
-                        <td class="px-2 py-1">
-                            <button @click="deleteRecord({{ record.id }})" class="text-red-600 hover:text-red-800 text-sm">删除</button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <p class="text-gray-500 text-center py-8">暂无实验数据</p>
-        {% endif %}
+        <!-- 右侧: 可编辑表格 -->
+        <div class="bg-white shadow rounded-lg p-4">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-medium text-gray-900">实验数据</h2>
+                <button @click="addRow()" class="text-sm bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">
+                    + 添加行
+                </button>
+            </div>
 
-        <div class="mt-4 pt-4 border-t">
-            <button @click="addRow()" class="w-full border border-dashed border-gray-300 rounded p-2 text-gray-500 hover:border-gray-400 hover:text-gray-700">
-                + 添加新行
-            </button>
+            {% if records %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Model</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Dataset</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Metric</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Value</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">已校验</th>
+                            <th class="px-2 py-1"></th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for record in records %}
+                        <tr>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.model_name }}"
+                                    @change="updateRecord({{ record.id }}, 'model_name', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.dataset }}"
+                                    @change="updateRecord({{ record.id }}, 'dataset', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.metric }}"
+                                    @change="updateRecord({{ record.id }}, 'metric', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="number" step="0.01" value="{{ record.value }}"
+                                    @change="updateRecord({{ record.id }}, 'value', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1 text-center">
+                                <input type="checkbox" {% if record.is_verified %}checked{% endif %}
+                                    @change="updateRecord({{ record.id }}, 'is_verified', $event.target.checked)"
+                                    class="rounded">
+                            </td>
+                            <td class="px-2 py-1">
+                                <button @click="deleteRecord({{ record.id }})" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-center py-8">暂无实验数据</p>
+            {% endif %}
+
+            <div class="mt-4 pt-4 border-t">
+                <button @click="addRow()" class="w-full border border-dashed border-gray-300 rounded p-2 text-gray-500 hover:border-gray-400 hover:text-gray-700">
+                    + 添加新行
+                </button>
+            </div>
         </div>
     </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-function reviewEditor() {
-    return {
-        async updateRecord(id, field, value) {
-            const data = { [field]: value };
-            if (field === 'is_verified') {
-                data.is_verified = value;
-            }
+    console.log('pdfjsLib loaded:', typeof pdfjsLib !== 'undefined');
+    if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        console.log('Worker options set');
+    }
 
-            try {
-                await fetch(`/record/${id}/`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-            } catch (error) {
-                alert('更新失败: ' + error.message);
-            }
-        },
+    function paperReviewApp() {
+        return {
+            pdfDoc: null,
+            pageNum: 1,
+            totalPages: 0,
+            scale: 1.2,
 
-        async deleteRecord(id) {
-            if (!confirm('确定删除这条记录？')) return;
+            async init() {
+                {% if paper.local_pdf %}
+                await this.loadPDF('/paper/{{ paper.id }}/pdf/');
+                {% endif %}
+            },
 
-            try {
-                await fetch(`/record/${id}/delete/`, { method: 'POST' });
-                window.location.reload();
-            } catch (error) {
-                alert('删除失败: ' + error.message);
-            }
-        },
-
-        async addRow() {
-            try {
-                const response = await fetch(`/paper/{{ paper.id }}/add_record/`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model_name: 'New Model',
-                        dataset: 'Dataset',
-                        metric: 'Acc',
-                        value: 0.0
-                    })
-                });
-
-                if (response.ok) {
-                    window.location.reload();
+            async loadPDF(url) {
+                console.log('Loading PDF from:', url);
+                try {
+                    if (typeof pdfjsLib === 'undefined') {
+                        throw new Error('pdf.js 未加载');
+                    }
+                    const loadingTask = pdfjsLib.getDocument(url);
+                    this.pdfDoc = await loadingTask.promise;
+                    console.log('PDF loaded, pages:', this.pdfDoc.numPages);
+                    this.totalPages = this.pdfDoc.numPages;
+                    await this.renderPage(1);
+                } catch (error) {
+                    console.error('PDF 加载失败, 切换到 object 标签:', error);
+                    document.getElementById('pdf-container').style.display = 'none';
+                    document.getElementById('pdf-object').style.display = 'block';
                 }
-            } catch (error) {
-                alert('添加失败: ' + error.message);
+            },
+
+            async renderPage(num) {
+                const page = await this.pdfDoc.getPage(num);
+                const viewport = page.getViewport({ scale: this.scale });
+
+                const canvas = document.getElementById('pdf-canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const renderContext = {
+                    canvasContext: context,
+                    viewport: viewport
+                };
+
+                await page.render(renderContext).promise;
+            },
+
+            async prevPage() {
+                if (this.pageNum > 1) {
+                    this.pageNum--;
+                    await this.renderPage(this.pageNum);
+                }
+            },
+
+            async nextPage() {
+                if (this.pageNum < this.totalPages) {
+                    this.pageNum++;
+                    await this.renderPage(this.pageNum);
+                }
+            },
+
+            async updateRecord(id, field, value) {
+                const data = { [field]: value };
+
+                try {
+                    await fetch(`/record/${id}/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                } catch (error) {
+                    alert('更新失败: ' + error.message);
+                }
+            },
+
+            async deleteRecord(id) {
+                if (!confirm('确定删除这条记录？')) return;
+
+                try {
+                    await fetch(`/record/${id}/delete/`, { method: 'POST' });
+                    window.location.reload();
+                } catch (error) {
+                    alert('删除失败: ' + error.message);
+                }
+            },
+
+            async addRow() {
+                try {
+                    const response = await fetch(`/paper/{{ paper.id }}/add_record/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model_name: 'New Model',
+                            dataset: 'Dataset',
+                            metric: 'Acc',
+                            value: 0.0
+                        })
+                    });
+
+                    if (response.ok) {
+                        window.location.reload();
+                    }
+                } catch (error) {
+                    alert('添加失败: ' + error.message);
+                }
             }
         }
     }
-}
 </script>
 {% endblock %}

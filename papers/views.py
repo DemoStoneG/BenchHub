@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'benchhub.settings')
 
 from django.shortcuts import render, get_object_or_404
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse, HttpResponse, FileResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 
@@ -63,6 +63,22 @@ def paper_detail(request, paper_id):
         'paper': paper,
         'records': records
     })
+
+
+def serve_pdf(request, paper_id):
+    """专用 PDF 预览视图"""
+    paper = get_object_or_404(Paper, id=paper_id)
+    if not paper.local_pdf:
+        return HttpResponse("No PDF", status=404)
+
+    with open(paper.local_pdf.path, 'rb') as f:
+        pdf_content = f.read()
+
+    response = HttpResponse(pdf_content, content_type='application/pdf')
+    response['Content-Disposition'] = f'inline; filename="{paper.title}.pdf"'
+    # 显式移除 X-Frame-Options
+    response['X-Frame-Options'] = 'SAMEORIGIN'
+    return response
 
 
 @csrf_exempt
