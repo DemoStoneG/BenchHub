@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+
+{% block title %}对比视图 - BenchHub{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-900">对比视图</h1>
+</div>
+
+<!-- 论文选择 -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">选择论文</h2>
+    <form method="get" action="/compare/">
+        <div class="flex flex-wrap gap-2 mb-4">
+            {% for paper in papers %}
+            <label class="inline-flex items-center px-3 py-2 rounded border {% if paper.id in selected %}bg-blue-50 border-blue-300{% else %}bg-white border-gray-300{% endif %} cursor-pointer">
+                <input type="checkbox" name="papers" value="{{ paper.id }}"
+                    {% if paper.id in selected %}checked{% endif %}
+                    onchange="this.form.submit()"
+                    class="mr-2">
+                <span class="text-sm">{{ paper.title|truncatechars:30 }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </form>
+</div>
+
+{% if selected %}
+<!-- 对比表格 -->
+<div class="bg-white shadow rounded-lg p-6 mb-6" x-data="{ copied: false }">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-medium text-gray-900">对比结果</h2>
+        <button @click="navigator.clipboard.writeText($refs.latexCode.textContent); copied = true; setTimeout(() => copied = false, 2000)"
+            class="text-sm bg-gray-100 text-gray-700 px-3 py-1 rounded hover:bg-gray-200">
+            <span x-show="!copied">复制 LaTeX</span>
+            <span x-show="copied" class="text-green-600">已复制!</span>
+        </button>
+    </div>
+
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200 text-sm">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Model</th>
+                    {% for dataset in datasets %}
+                    <th class="px-4 py-2 text-center text-xs font-medium text-gray-500" colspan="2">{{ dataset }}</th>
+                    {% endfor %}
+                </tr>
+                <tr>
+                    <th class="px-4 py-2"></th>
+                    {% for dataset in datasets %}
+                    <th class="px-4 py-2 text-center text-xs font-medium text-gray-500">Acc</th>
+                    <th class="px-4 py-2 text-center text-xs font-medium text-gray-500">F1</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for model in models %}
+                <tr>
+                    <td class="px-4 py-2 font-medium text-gray-900">{{ model }}</td>
+                    {% for dataset in datasets %}
+                    <td class="px-4 py-2 text-center">
+                        {% for record in records %}
+                            {% if record.model_name == model and record.dataset == dataset and record.metric == 'Acc' %}
+                            {{ record.value|floatformat:2 }}
+                            {% endif %}
+                        {% endfor %}
+                    </td>
+                    <td class="px-4 py-2 text-center">
+                        {% for record in records %}
+                            {% if record.model_name == model and record.dataset == dataset and record.metric == 'F1' %}
+                            {{ record.value|floatformat:2 }}
+                            {% endif %}
+                        {% endfor %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- LaTeX 代码 -->
+<div class="bg-white shadow rounded-lg p-6">
+    <h2 class="text-lg font-medium text-gray-900 mb-4">LaTeX 代码</h2>
+    <div class="bg-gray-100 rounded p-4 overflow-x-auto">
+        <pre x-ref="latexCode" class="text-sm text-gray-800 whitespace-pre">{{ latex_code }}</pre>
+    </div>
+</div>
+{% else %}
+<div class="text-center py-12 bg-white rounded-lg shadow">
+    <p class="text-gray-500 mb-4">请勾选左侧论文开始对比</p>
+</div>
+{% endif %}
+{% endblock %}
