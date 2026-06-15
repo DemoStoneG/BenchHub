@@ -4,7 +4,10 @@
 
 {% block content %}
 <div class="max-w-2xl mx-auto">
-    <h1 class="text-2xl font-bold text-gray-900 mb-6">上传论文</h1>
+    <div class="mb-4">
+        <a href="/projects/{{ session_obj.id }}/" class="text-blue-600 hover:text-blue-800">&larr; 返回 {{ session_obj.name }}</a>
+    </div>
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">上传论文 · {{ session_obj.name }}</h1>
 
     <div x-data="uploadForm()" class="bg-white shadow rounded-lg p-6">
         {% csrf_token %}
@@ -46,6 +49,7 @@
 </div>
 
 <script>
+const sessionId = {{ session_obj.id }};
 function uploadForm() {
     return {
         title: '',
@@ -58,6 +62,10 @@ function uploadForm() {
 
         handleFileSelect(e) {
             this.selectedFile = e.target.files[0];
+            if (this.selectedFile) {
+                // 把文件名（去 .pdf 后缀）自动填到标题，方便查看和修改
+                this.title = this.selectedFile.name.replace(/\.pdf$/i, '');
+            }
         },
 
         async submitForm() {
@@ -74,7 +82,7 @@ function uploadForm() {
             formData.append('pdf', this.selectedFile);
 
             try {
-                const response = await fetch('/upload/', {
+                const response = await fetch('/projects/' + sessionId + '/upload/', {
                     method: 'POST',
                     headers: {
                         'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
@@ -105,20 +113,22 @@ function uploadForm() {
         async pollStatus(paperId) {
             const check = async () => {
                 try {
-                    const response = await fetch(`/paper/${paperId}/status/`);
+                    const response = await fetch(`/articles/${paperId}/status/`);
                     const data = await response.json();
 
-                    this.progress = data.status === 'completed' ? 100 : 85;
-
                     if (data.status === 'completed') {
+                        this.progress = 100;
                         this.statusMessage = '解析完成！';
                         setTimeout(() => {
-                            window.location.href = `/paper/${paperId}/`;
+                            window.location.href = `/articles/${paperId}/`;
                         }, 500);
                     } else if (data.status === 'failed') {
+                        this.progress = 0;
                         this.statusMessage = '解析失败: ' + data.error_message;
                     } else {
-                        this.statusMessage = '解析中...';
+                        // 中间状态：extracting / calling_llm
+                        this.progress = data.status === 'calling_llm' ? 85 : 50;
+                        this.statusMessage = data.progress_message || '解析中...';
                         setTimeout(check, 2000);
                     }
                 } catch (error) {

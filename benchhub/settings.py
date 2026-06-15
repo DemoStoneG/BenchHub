@@ -122,6 +122,10 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# HuggingFace 镜像（国内加速）
+import os
+os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
+
 # MiniMax LLM API Config
 MINIMAX_API_KEY = 'sk-cp-46EX0RUzHtsOAbX9g-boWdSARiQe_WbuooTAGCKFQD0G9IgiFgBpNSKvjOyl_PpEEssxOdxlqr5tGzScJoop5ccZJSE7fvAineVH8brgWJ4B6pSav5_eI7M'
 MINIMAX_API_ENDPOINT = 'https://api.minimaxi.com/v1/text/chatcompletion_v2'

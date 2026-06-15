@@ -6,6 +6,142 @@
     <title>{% block title %}BenchHub{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+    <script>
+    // 自写最简 GFM / Multimd 表格 block rule。
+    // 处理 pymupdf4llm 输出的 |...|...| 表格，包括：
+    //   - 多行表头（||---|--- 这种空 header）
+    //   - cell 内 <br> 多行内容（用 HTML inline 渲染以保留换行）
+    //   - **加粗** / *斜体* 标记
+    (function(){
+        function splitRow(line) {
+            // 去掉首尾 |，按 | 切
+            let s = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '');
+            // 不在转义 \| 时按 | 分
+            return s.split(/(?<!\\)\|/).map(c => c.replace(/\\\|/g, '|').trim());
+        }
+        function parseAlign(sepLine) {
+            const cells = splitRow(sepLine);
+            return cells.map(c => {
+                const m = c.match(/^\s*:?-+:?\s*$/);
+                if (!m) return null;
+                const left = c.startsWith(':');
+                const right = c.trim().endsWith(':');
+                if (left && right) return 'center';
+                if (right) return 'right';
+                if (left) return 'left';
+                return null;
+            });
+        }
+        function gfmTablePlugin(md) {
+            // 关掉 markdown-it@14 自带的 GFM table（用我们的美化版）
+            md.block.ruler.disable('table', true);
+
+            md.block.ruler.before('paragraph', 'gfm_table', function(state, startLine, endLine, silent) {
+                const start = state.bMarks[startLine] + state.tShift[startLine];
+                const max = state.eMarks[startLine];
+                let line = state.src.slice(start, max);
+                if (line.indexOf('|') === -1) return false;
+                if (startLine + 1 >= endLine) return false;
+
+                // 第二行必须是分隔行
+                const ns = state.bMarks[startLine + 1] + state.tShift[startLine + 1];
+                const nm = state.eMarks[startLine + 1];
+                const sepLine = state.src.slice(ns, nm);
+                if (!/^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(sepLine)) return false;
+
+                if (silent) return true;
+
+                const aligns = parseAlign(sepLine);
+                const headerCells = splitRow(line);
+
+                // 收集数据行
+                const rows = [];
+                let lineIdx = startLine + 2;
+                while (lineIdx < endLine) {
+                    const s = state.bMarks[lineIdx] + state.tShift[lineIdx];
+                    const m = state.eMarks[lineIdx];
+                    const l = state.src.slice(s, m).trim();
+                    if (l.indexOf('|') === -1) break;
+                    // 空行（全是 |）也保留
+                    rows.push(splitRow(l));
+                    lineIdx++;
+                }
+
+                const token = state.push('gfm_table', '', 0);
+                token.block = true;
+                token.content = '';
+                token.children = [];
+                token.info = '';
+                token.map = [startLine, lineIdx];
+                token.markup = '';
+
+                // 把内容保存到 token 上
+                token.header = headerCells;
+                token.aligns = aligns;
+                token.rows = rows;
+
+                state.line = lineIdx;
+                return true;
+            });
+            md.renderer.rules.gfm_table = function(tokens, idx) {
+                const t = tokens[idx];
+                const alignAttr = (a) => a ? ` style="text-align:${a}"` : '';
+                // Decode HTML entities in case upstream code HTML-escaped the markdown
+                // (e.g. legacy template paths). Use a detached element so we don't
+                // accidentally execute scripts.
+                const decodeEntities = (s) => {
+                    if (s == null) return '';
+                    if (s.indexOf('&') === -1) return s;
+                    const tmp = document.createElement('textarea');
+                    tmp.innerHTML = s;
+                    return tmp.value;
+                };
+                const isBlankCell = (s) => {
+                    if (s == null) return true;
+                    const stripped = decodeEntities(s).replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').trim();
+                    return stripped === '';
+                };
+                const isAllBlank = (row) => row.every(isBlankCell);
+                const cellRender = (c) => md.renderInline(decodeEntities(c));
+
+                // 去掉全空行（pymupdf4llm 经常用 `| | |` 作为视觉占位）
+                const cleanRows = t.rows.filter(r => !isAllBlank(r));
+
+                let html = '<table class="gfm-table">\n';
+                html += '<thead><tr>';
+                t.header.forEach((h, i) => {
+                    html += `<th${alignAttr(t.aligns[i])}>${cellRender(h)}</th>`;
+                });
+                html += '</tr></thead>\n<tbody>';
+                cleanRows.forEach((row, ri) => {
+                    // 段标题行（UDA / DG 这种）通常只有一个非空 cell 且内容短
+                    const nonBlank = row.filter(c => !isBlankCell(c));
+                    const isSep = nonBlank.length === 1 && nonBlank[0].length < 30;
+                    html += '<tr' + (isSep ? ' class="group-sep"' : '') + '>';
+                    for (let i = 0; i < t.header.length; i++) {
+                        const c = row[i] !== undefined ? row[i] : '';
+                        const blank = isBlankCell(c);
+                        const cont = blank && i > 0; // 续行：cell 空但非首列
+                        const cls = [];
+                        if (i === 0) cls.push('col-method');
+                        if (cont) cls.push('cont');
+                        const clsAttr = cls.length ? ` class="${cls.join(' ')}"` : '';
+                        html += `<td${alignAttr(t.aligns[i])}${clsAttr}>${cellRender(c || ' ')}</td>`;
+                    }
+                    html += '</tr>';
+                });
+                html += '</tbody></table>\n';
+                return html;
+            };
+        }
+        window.gfmTablePlugin = gfmTablePlugin;
+    })();
+
+    // 全局 markdown-it 实例：开启 HTML（cell 内 <br> 换行）+ GFM 表格插件
+    window.md = window.markdownit({ html: true, linkify: false, typographer: false, breaks: false });
+    window.md.use(window.gfmTablePlugin);
+    </script>
     <style>
         [x-cloak] { display: none !important; }
     </style>
@@ -19,9 +155,8 @@
                     <a href="/" class="text-xl font-bold text-gray-900">BenchHub</a>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <a href="/" class="px-3 py-2 text-gray-700 hover:text-gray-900">论文列表</a>
-                    <a href="/upload/" class="px-3 py-2 text-gray-700 hover:text-gray-900">上传论文</a>
-                    <a href="/compare/" class="px-3 py-2 text-gray-700 hover:text-gray-900">对比视图</a>
+                    <a href="/" class="px-3 py-2 text-gray-700 hover:text-gray-900">我的项目</a>
+                    <a href="/projects/new/" class="px-3 py-2 text-gray-700 hover:text-gray-900">+ 新建项目</a>
                 </div>
             </div>
         </div>

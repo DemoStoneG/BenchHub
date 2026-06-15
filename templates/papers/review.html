@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="mb-4">
-    <a href="/" class="text-blue-600 hover:text-blue-800">&larr; 返回列表</a>
+    <a href="/projects/{{ paper.session_id }}/" class="text-blue-600 hover:text-blue-800">&larr; 返回 {{ paper.session.name }}</a>
 </div>
 
 <div class="mb-6">
@@ -12,48 +12,111 @@
     {% if paper.arxiv_id %}
     <p class="text-gray-500">arXiv: {{ paper.arxiv_id }}</p>
     {% endif %}
-    <p class="text-sm text-gray-500 mt-1">上传于 {{ paper.created_at|date:"Y-m-d H:i" }}</p>
+    <p class="text-sm text-gray-500 mt-1">上传于 {{ paper.created_at|date:"Y-m-d H:i" }} · 项目 <a href="/projects/{{ paper.session_id }}/" class="text-blue-600 hover:underline">{{ paper.session.name }}</a></p>
 </div>
 
 <div x-data="paperReviewApp()">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- 左侧: PDF 预览 -->
-        <div class="bg-white shadow rounded-lg p-4">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-medium text-gray-900">PDF 预览</h2>
+    <!-- 指标合并工具栏 -->
+    {% if records %}
+    <div class="mb-4 bg-white shadow rounded-lg p-4" x-data="{ selectedMetrics: [], mergeTarget: '' }">
+        <details>
+            <summary class="cursor-pointer text-gray-600 hover:text-gray-900 text-sm">合并指标（解决 Accuracy / Acc 同名不同写）</summary>
+            <div class="mt-2">
+                <div class="text-xs text-gray-500 mb-1">勾选要合并的 metric（出现频次）：</div>
+                <div class="flex flex-wrap gap-1 mb-2">
+                    {% for metric, count in metric_summary %}
+                    <label class="inline-flex items-center px-2 py-1 border border-gray-300 bg-white rounded cursor-pointer text-xs hover:border-purple-300">
+                        <input type="checkbox" value="{{ metric }}" x-model="selectedMetrics" class="mr-1">
+                        {{ metric }} ({{ count }})
+                    </label>
+                    {% endfor %}
+                </div>
                 <div class="flex items-center space-x-2">
-                    <button @click="prevPage()" :disabled="pageNum <= 1" class="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50">上一页</button>
-                    <span class="text-sm"><span x-text="pageNum"></span> / <span x-text="totalPages"></span></span>
-                    <button @click="nextPage()" :disabled="pageNum >= totalPages" class="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50">下一页</button>
+                    <span class="text-xs text-gray-500">合并为：</span>
+                    <input type="text" x-model="mergeTarget" placeholder="目标 metric 名，如 Acc"
+                        class="flex-1 border rounded px-2 py-1 text-sm">
+                    <button @click="mergeMetrics(selectedMetrics, mergeTarget)" :disabled="!mergeTarget || selectedMetrics.length < 2"
+                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded hover:bg-purple-200 disabled:opacity-50">
+                        合并 (<span x-text="selectedMetrics.length"></span>)
+                    </button>
                 </div>
             </div>
-            {% if paper.local_pdf %}
-            <div id="pdf-container" class="overflow-auto" style="height: 600px;">
-                <canvas id="pdf-canvas" class="mx-auto"></canvas>
+        </details>
+    </div>
+    {% endif %}
+
+    <!-- ====== 提取的表格（自动从数据库加载） ====== -->
+    {% if chunk_groups %}
+    <div class="mb-4 bg-white shadow rounded-lg p-4">
+        <h2 class="text-lg font-bold text-gray-800 mb-2">📊 提取的表格 <span class="text-xs text-gray-400 font-normal">(Docling/TableFormer)</span></h2>
+        <div class="space-y-6 mt-3">
+            {% for group in chunk_groups %}
+            {% if group.chunk %}
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700 flex justify-between">
+                    <span>Table {{ group.chunk.table_n }} · p{{ group.chunk.page }}{% if group.chunk.caption %} — {{ group.chunk.caption }}{% endif %}</span>
+                    <span class="text-gray-400 text-xs">[{{ group.chunk.extraction_method }}]</span>
+                </div>
+                <div class="p-2 overflow-x-auto">
+                    {% if group.chunk.is_docling_html %}
+                        <div class="docling-table">{{ group.chunk.html_content|safe }}</div>
+                    {% elif group.chunk.has_structured %}
+                        {% include 'papers/partials/structured_table.html' with chunk=group.chunk %}
+                    {% elif group.chunk.markdown_text and '|' in group.chunk.markdown_text %}
+                        <script type="application/json" id="md-src-{{ group.chunk.id }}">"{{ group.chunk.markdown_text|escapejs }}"</script>
+                        <div x-data x-init="
+                            (function(){
+                                const el = document.getElementById('md-src-{{ group.chunk.id }}');
+                                if (!el) return;
+                                let raw;
+                                try { raw = JSON.parse(el.textContent); } catch (e) { raw = el.textContent; }
+                                $el.innerHTML = window.md.render(raw);
+                            })()
+                        " class="md-table-render prose prose-sm max-w-none"></div>
+                    {% else %}
+                        <pre class="whitespace-pre-wrap text-xs text-gray-500 max-h-96 overflow-auto font-mono">{{ group.chunk.markdown_text }}</pre>
+                    {% endif %}
+                </div>
             </div>
-            <!-- 备用: object 标签使用专用PDF视图 -->
-            <object id="pdf-object" data="/paper/{{ paper.id }}/pdf/" type="application/pdf" style="width: 100%; height: 600px; display: none;">
-                <p>PDF 无法在此浏览器中显示，请 <a href="/paper/{{ paper.id }}/pdf/" target="_blank">下载查看</a></p>
-            </object>
-            {% else %}
-            <p class="text-gray-500">暂无 PDF 文件</p>
             {% endif %}
+            {% endfor %}
         </div>
+    </div>
+    {% endif %}
 
-        <!-- 右侧: 可编辑表格 -->
-        <div class="bg-white shadow rounded-lg p-4">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-medium text-gray-900">实验数据</h2>
-                <button @click="addRow()" class="text-sm bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200">
-                    + 添加行
-                </button>
-            </div>
+    <div class="text-sm text-gray-500 mb-3">
+        共 {{ records|length }} 条记录，已校验 {{ verified_count }} · {{ chunk_groups|length }} 张表
+    </div>
 
-            {% if records %}
-            <div class="overflow-x-auto">
+    {% if not chunk_groups %}
+    <div class="text-center py-12 bg-white rounded-lg shadow">
+        {% if paper.status == 'failed' %}
+            <p class="text-gray-500">解析失败，无数据</p>
+        {% elif paper.status == 'completed' %}
+            <p class="text-gray-500">该论文未提取到表格与数据</p>
+        {% else %}
+            <p class="text-gray-500">解析中...</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Record 数据编辑（按表格分组） -->
+    {% if records %}
+    <div class="mb-4">
+        <h2 class="text-lg font-bold text-gray-800 mb-3">📝 实验数据 <span class="text-xs text-gray-400 font-normal">({{ records|length }} 条 / 已校验 {{ verified_count }})</span></h2>
+    </div>
+    {% endif %}
+    {% for group in chunk_groups %}
+        {% if group.chunk and group.records %}
+            <div class="bg-white shadow rounded-lg p-5 mb-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-gray-700">Table {{ group.chunk.table_n }} <span class="text-gray-400 font-normal">@ p{{ group.chunk.page }}</span></h3>
+                    <span class="text-xs text-gray-500">{{ group.records|length }} 条</span>
+                </div>
                 <table class="min-w-full divide-y divide-gray-200 text-sm">
                     <thead class="bg-gray-50">
                         <tr>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-purple-700">Benchmark</th>
                             <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Model</th>
                             <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Dataset</th>
                             <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Metric</th>
@@ -63,8 +126,13 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
-                        {% for record in records %}
+                        {% for record in group.records %}
                         <tr>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.benchmark }}"
+                                    @change="updateRecord({{ record.id }}, 'benchmark', $event.target.value)"
+                                    class="w-full border border-purple-200 rounded px-2 py-1 text-sm bg-purple-50">
+                            </td>
                             <td class="px-2 py-1">
                                 <input type="text" value="{{ record.model_name }}"
                                     @change="updateRecord({{ record.id }}, 'model_name', $event.target.value)"
@@ -98,94 +166,213 @@
                     </tbody>
                 </table>
             </div>
-            {% else %}
-            <p class="text-gray-500 text-center py-8">暂无实验数据</p>
-            {% endif %}
-
-            <div class="mt-4 pt-4 border-t">
-                <button @click="addRow()" class="w-full border border-dashed border-gray-300 rounded p-2 text-gray-500 hover:border-gray-400 hover:text-gray-700">
-                    + 添加新行
-                </button>
+            </div>
+        {% elif not group.chunk %}
+        <!-- 未关联到任何 chunk 的 records（兜底） -->
+        <div class="bg-yellow-50 border border-yellow-200 shadow rounded-lg p-5 mb-4">
+            <div class="flex justify-between items-center mb-3">
+                <div>
+                    <h2 class="text-base font-semibold text-yellow-800">未关联到表格的记录</h2>
+                    <p class="text-xs text-yellow-600 mt-1">这 {{ group.records|length }} 条数据没有对应 TableChunk，可手工编辑或删除</p>
+                </div>
+                <div class="flex space-x-2">
+                    <button @click="verifyAll()" class="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200">
+                        ✓ 全部校验
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-purple-700">Benchmark</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Model</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Dataset</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Metric</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">Value</th>
+                            <th class="px-2 py-1 text-left text-xs font-medium text-gray-500">已校验</th>
+                            <th class="px-2 py-1"></th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for record in group.records %}
+                        <tr>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.benchmark }}"
+                                    @change="updateRecord({{ record.id }}, 'benchmark', $event.target.value)"
+                                    class="w-full border border-purple-200 rounded px-2 py-1 text-sm bg-purple-50">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.model_name }}"
+                                    @change="updateRecord({{ record.id }}, 'model_name', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.dataset }}"
+                                    @change="updateRecord({{ record.id }}, 'dataset', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="text" value="{{ record.metric }}"
+                                    @change="updateRecord({{ record.id }}, 'metric', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1">
+                                <input type="number" step="0.01" value="{{ record.value }}"
+                                    @change="updateRecord({{ record.id }}, 'value', $event.target.value)"
+                                    class="w-full border rounded px-2 py-1 text-sm">
+                            </td>
+                            <td class="px-2 py-1 text-center">
+                                <input type="checkbox" {% if record.is_verified %}checked{% endif %}
+                                    @change="updateRecord({{ record.id }}, 'is_verified', $event.target.checked)"
+                                    class="rounded">
+                            </td>
+                            <td class="px-2 py-1">
+                                <button @click="deleteRecord({{ record.id }})" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
-    </div>
+        {% endif %}
+    {% endfor %}
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script>
-    console.log('pdfjsLib loaded:', typeof pdfjsLib !== 'undefined');
-    if (typeof pdfjsLib !== 'undefined') {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        console.log('Worker options set');
+<style>
+    /* === 结构化 HTML 表格样式（真表格，含 colspan/rowspan）=== */
+    .structured-table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.85rem;
+        line-height: 1.35;
+        background: #fff;
+        font-variant-numeric: tabular-nums;
+        border-top: 2px solid #374151;
+        border-bottom: 2px solid #374151;
+    }
+    .structured-table th,
+    .structured-table td {
+        border: 1px solid #d1d5db;
+        padding: 6px 10px;
+        text-align: center;
+        vertical-align: middle;
+    }
+    .structured-table thead th {
+        background: #f1f5f9;
+        font-weight: 600;
+        color: #1f2937;
+        border-bottom: 2px solid #6b7280;
+    }
+    .structured-table thead tr:not(:last-child) th {
+        border-bottom: 1px solid #d1d5db;
+    }
+    .structured-table tbody td:first-child {
+        text-align: left;
+        font-weight: 500;
+        color: #111827;
+    }
+    .structured-table tbody tr:nth-child(even) td {
+        background: #fafbfc;
+    }
+    .structured-table tbody tr:hover td {
+        background: #fef3c7;
+    }
+    /* 段标题行（保留在主表 body 里的蓝色横条 <tr>） */
+    .structured-section-row td.structured-section-bar {
+        background: linear-gradient(90deg, #eef2ff, #ede9fe);
+        border-top: 1px solid #c7d2fe;
+        border-bottom: 1px solid #c7d2fe;
+        border-left: 4px solid #6366f1;
+        padding: 6px 12px;
+    }
+    .structured-section-bar .section-label {
+        font-weight: 700;
+        color: #4338ca;
+        font-size: 0.95rem;
+        letter-spacing: 0.02em;
     }
 
+    /* === 原 markdown 渲染样式（fallback 用）=== */
+    .md-table-render { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+    .md-table-render table.gfm-table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.85rem;
+        line-height: 1.35;
+        background: #fff;
+        border-top: 2px solid #374151;
+        border-bottom: 2px solid #374151;
+    }
+    .md-table-render table.gfm-table th,
+    .md-table-render table.gfm-table td {
+        border: 1px solid #d1d5db;
+        padding: 6px 10px;
+        text-align: left;
+        vertical-align: top;
+    }
+    .md-table-render table.gfm-table th {
+        background: #f1f5f9;
+        font-weight: 600;
+        color: #1f2937;
+        text-align: center;
+        border-bottom: 2px solid #6b7280;
+    }
+    /* 首列（Method / Setting）加粗 */
+    .md-table-render table.gfm-table td.col-method {
+        font-weight: 600;
+        color: #111827;
+    }
+    /* 续行（cell 空但非首列）淡化 */
+    .md-table-render table.gfm-table td.cont {
+        color: #9ca3af;
+        background: #fafafa;
+    }
+    /* 数字 cell 右对齐：含小数点或 ▲ 等 */
+    .md-table-render table.gfm-table td {
+        font-variant-numeric: tabular-nums;
+    }
+    /* 段标题行（UDA / DG 这种只有首列非空） */
+    .md-table-render table.gfm-table tr.group-sep td {
+        background: #eef2ff;
+        font-weight: 700;
+        color: #3730a3;
+    }
+    .md-table-render table.gfm-table tr.group-sep td:not(:first-child) {
+        background: transparent;
+        color: transparent;
+    }
+    /* 斑马纹（更柔和） */
+    .md-table-render table.gfm-table tbody tr:nth-child(even) td {
+        background: #fafbfc;
+    }
+    .md-table-render table.gfm-table tbody tr:nth-child(even) td.cont {
+        background: #f3f4f6;
+    }
+    /* hover 高亮整行（用于校对时定位） */
+    .md-table-render table.gfm-table tbody tr:hover td {
+        background: #fef3c7;
+    }
+    .md-table-render h1, .md-table-render h2, .md-table-render h3 {
+        margin: 0.2em 0;
+        font-size: 0.95em;
+    }
+    .md-table-render p { margin: 0; }
+</style>
+
+<script>
     function paperReviewApp() {
         return {
-            pdfDoc: null,
-            pageNum: 1,
-            totalPages: 0,
-            scale: 1.2,
-
-            async init() {
-                {% if paper.local_pdf %}
-                await this.loadPDF('/paper/{{ paper.id }}/pdf/');
-                {% endif %}
-            },
-
-            async loadPDF(url) {
-                console.log('Loading PDF from:', url);
-                try {
-                    if (typeof pdfjsLib === 'undefined') {
-                        throw new Error('pdf.js 未加载');
-                    }
-                    const loadingTask = pdfjsLib.getDocument(url);
-                    this.pdfDoc = await loadingTask.promise;
-                    console.log('PDF loaded, pages:', this.pdfDoc.numPages);
-                    this.totalPages = this.pdfDoc.numPages;
-                    await this.renderPage(1);
-                } catch (error) {
-                    console.error('PDF 加载失败, 切换到 object 标签:', error);
-                    document.getElementById('pdf-container').style.display = 'none';
-                    document.getElementById('pdf-object').style.display = 'block';
-                }
-            },
-
-            async renderPage(num) {
-                const page = await this.pdfDoc.getPage(num);
-                const viewport = page.getViewport({ scale: this.scale });
-
-                const canvas = document.getElementById('pdf-canvas');
-                const context = canvas.getContext('2d');
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
-
-                const renderContext = {
-                    canvasContext: context,
-                    viewport: viewport
-                };
-
-                await page.render(renderContext).promise;
-            },
-
-            async prevPage() {
-                if (this.pageNum > 1) {
-                    this.pageNum--;
-                    await this.renderPage(this.pageNum);
-                }
-            },
-
-            async nextPage() {
-                if (this.pageNum < this.totalPages) {
-                    this.pageNum++;
-                    await this.renderPage(this.pageNum);
-                }
+            get csrfToken() {
+                const m = document.cookie.match('(^|;)\\s*csrftoken=([^;]+)');
+                return m ? m.pop() : '';
             },
 
             async updateRecord(id, field, value) {
                 const data = { [field]: value };
-
                 try {
-                    await fetch(`/record/${id}/`, {
+                    await fetch(`/records/${id}/`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(data)
@@ -197,36 +384,55 @@
 
             async deleteRecord(id) {
                 if (!confirm('确定删除这条记录？')) return;
-
                 try {
-                    await fetch(`/record/${id}/delete/`, { method: 'POST' });
+                    await fetch(`/records/${id}/delete/`, { method: 'POST' });
                     window.location.reload();
                 } catch (error) {
                     alert('删除失败: ' + error.message);
                 }
             },
 
-            async addRow() {
+            async verifyAll() {
+                if (!confirm('将所有未校验记录标记为已校验？')) return;
                 try {
-                    const response = await fetch(`/paper/{{ paper.id }}/add_record/`, {
+                    const resp = await fetch(`/articles/{{ paper.id }}/verify_all/`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            model_name: 'New Model',
-                            dataset: 'Dataset',
-                            metric: 'Acc',
-                            value: 0.0
-                        })
+                        headers: { 'X-CSRFToken': this.csrfToken }
                     });
-
-                    if (response.ok) {
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        alert(`已校验 ${data.updated} 条记录`);
                         window.location.reload();
+                    } else {
+                        alert('操作失败');
                     }
-                } catch (error) {
-                    alert('添加失败: ' + error.message);
+                } catch (e) {
+                    alert('错误: ' + e.message);
+                }
+            },
+
+            async mergeMetrics(sources, target) {
+                if (!target || sources.length < 2) return;
+                if (!confirm(`将 ${sources.length} 个 metric 合并为 "${target}"，确认？`)) return;
+                try {
+                    const resp = await fetch(`/articles/{{ paper.id }}/merge_metrics/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrfToken },
+                        body: JSON.stringify({ target, sources })
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        alert(`已合并 ${data.updated} 条，跳过 ${data.skipped} 条冲突`);
+                        window.location.reload();
+                    } else {
+                        alert('操作失败');
+                    }
+                } catch (e) {
+                    alert('错误: ' + e.message);
                 }
             }
         }
     }
+
 </script>
 {% endblock %}

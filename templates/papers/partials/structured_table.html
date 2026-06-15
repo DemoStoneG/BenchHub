@@ -1,0 +1,43 @@
+{% comment %}
+结构化表格渲染 partial。
+接收 `chunk` 字典（_chunk_to_renderable 返回值）：
+  - header_rows: list[list[{text,colspan,rowspan}]]
+  - body_rows:   list[list[{text,colspan,rowspan,...}]]
+  - 段标题行：view 层把整行打包成"ci=0 一个 cell（is_section_marker=True, section_text=X, colspan=列数）"，
+    其余 cell 全部忽略。所以模板只需判断 brow.0.is_section_marker。
+  - caption / page / table_n
+{% endcomment %}
+
+<div class="overflow-x-auto">
+    <table class="structured-table">
+        {% if chunk.header_rows %}
+        <thead>
+            {% for hrow in chunk.header_rows %}
+            <tr>
+                {% for c in hrow %}
+                <th colspan="{{ c.colspan|default:1 }}" rowspan="{{ c.rowspan|default:1 }}">{{ c.text }}</th>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </thead>
+        {% endif %}
+        <tbody>
+            {% for brow in chunk.body_rows %}
+                {% if brow.0.is_section_marker %}
+                {# 段标题行：整行蓝色横条 #}
+                <tr class="structured-section-row">
+                    <td colspan="{{ brow.0.colspan|default:brow|length }}" class="structured-section-bar">
+                        <span class="section-label">{{ brow.0.section_text|default:brow.0.text }}</span>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    {% for c in brow %}
+                    <td colspan="{{ c.colspan|default:1 }}" rowspan="{{ c.rowspan|default:1 }}">{{ c.text }}</td>
+                    {% endfor %}
+                </tr>
+                {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
