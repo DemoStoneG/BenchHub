@@ -1,16 +1,17 @@
-Django>=4.2,<4.3
-requests>=2.30
-camelot-py>=2.0.0
-PyMuPDF>=1.27.0
-pymupdf4llm>=1.27.0
-pypdf>=6.0
-pdfplumber>=0.11.0
-pypdfium2>=5.0
-Pillow>=10.0
-torch>=2.5,<3.0
-transformers>=4.44,<4.46
-timm>=1.0
-accelerate>=1.0
+# BenchHub 所需依赖
+# 安装: pip install -r requirements.txt
+
+# Web 框架
+Django>=4.2,<5.0
+
+# PDF 表格提取（Docling + 子行拆分）
 docling>=2.0
-transformers>=5.0
-huggingface_hub>=1.0
+PyMuPDF>=1.27
+pymupdf4llm>=1.27
+
+# LLM API 调用
+requests>=2.30
+
+# 其他
+pypdf>=6.0
+opencv-python-headless>=4.10
