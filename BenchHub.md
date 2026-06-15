@@ -2,200 +2,187 @@
 
 ## 1. 产品定位
 
-一个为研究人员/开发者设计的本地化工具。用户上传论文 PDF，系统自动抽取实验数据，构建私有的 SOTA 对比库，减少写论文对比表时手动"查数"和"敲数"的时间。
+一个为研究人员/开发者设计的本地化工具。用户上传论文 PDF，系统自动抽取实验数据，按 Benchmark 分组构建排行榜，对标 [Wizwand SOTA Leaderboard](https://www.wizwand.com/sota/action-recognition-on-epic-kitchens-100-test) 的体验。
 
 - **私有化**：数据存储在本地/私有服务器，不强制公开
-- **工具化**：核心目标是把 PDF 里的实验数字快速、准确地变成可编辑、可对比、可导出的结构化数据
+- **自动化**：上传 PDF → 表格提取 → LLM 逐表抽取 → 排行榜汇聚，全自动
+- **排名**：同一 Benchmark 下多篇论文的模型按指标排名，对标 Wizwand SOTA 体验
 
 ---
 
 ## 2. 当前实现状态（2026-06-15）
 
-所有 MVP Step 1-5 已实现，并在此之上做了显著增强：
+### 2.1 完整功能清单
 
-### 2.1 已完成的 MVP 功能
-
-| Step | 功能 | 状态 |
+| 模块 | 功能 | 状态 |
 |:---|:---|:---|
-| **Step 1** | Django 工程搭建、Paper/Session 模型、文件上传 | 已完成 |
-| **Step 2** | PDF 表格提取 pipeline（Docling/TableFormer → HTML → TableChunk） | 已完成 |
-| **Step 3** | 前端表格展示与人工校验编辑器 | 已完成 |
-| **Step 4** | 多论文对比视图（按 Benchmark 分组对齐） | 已完成 |
-| **Step 5** | LaTeX 导出（按 Benchmark 分块生成 tabular） | 已完成 |
+| **项目 Session** | 多项目隔离，每个项目独立管理论文与排行榜 | ✅ |
+| **PDF 上传** | 上传 PDF → 异步任务自动完成全部流程 | ✅ |
+| **表格提取** | Docling TableFormer 识别 PDF 表格结构，含 colspan/rowspan、表头语义、段标题 | ✅ |
+| **子行拆分** | PyMuPDF 词坐标 Y 聚类，检测 Word 行合并 → 拆为独立 `<tr>`，虚线分隔 | ✅ |
+| **LLM 数据抽取** | 逐表调用 MiniMax M2，抽取 (Benchmark, Model, Dataset, Metric, Value) 元组 | ✅ |
+| **表格分类** | LLM 自动判断 is_experimental，非实验表（数据集统计等）自动折叠并标注原因 | ✅ |
+| **自动打标签** | 每张表标注 datasets + tasks 标签，显示在表格头部 | ✅ |
+| **数据归一化** | Benchmark 名称归一化（别名映射 + 去掉 "on XXX" 后缀）+ Dataset 归一化（EPIC-KITCHENS 全变体合并） | ✅ |
+| **表格预览** | PDF 表格渲染为 HTML 展示，可折叠，非实验表自动折叠 | ✅ |
+| **排行榜列表** | 按项目分组，每个 Benchmark 一张卡片，显示模型数/数据集数/最高分 | ✅ |
+| **排行榜详情** | 单个 Benchmark 下多数据集排名表，客户端 Alpine.js 排序（点击列头 升/降序） | ✅ |
+| **Benchmark 说明** | 每个排行榜顶部显示中文任务描述 | ✅ |
+| **论文链接定位** | 排行榜中论文链接跳转到对应表格锚点（#tc-<id>） | ✅ |
+| **项目页面入口** | 项目页顶部"🏆 排行榜"按钮 | ✅ |
+| **Django Admin** | 后台可编辑 Session / Paper / ExperimentRecord | ✅ |
+| **重新解析** | 项目页点"重新解析"→ 清空旧数据 → 表格提取 → LLM 抽取全自动 | ✅ |
 
-### 2.2 额外增强（超出 MVP）
-
-- **项目（Session）管理**：支持创建/编辑/删除多个项目，每个项目内论文与对比独立隔离
-- **AI 表格提取**（2026-06 重写）：从 PDF 论文中自动提取完整表格结构，渲染为 HTML，**结果持久化到数据库，上传/重试时自动执行**
-- **子行拆分**（2026-06-15 新增）：当 TableFormer 将 PDF 中多个物理子行合并为一个逻辑行时，自动检测并拆分为独立 `<tr>`，带虚线分隔和 rowspan
-- **重试进度条**（2026-06-15 新增）：点击"重新解析"后实时显示状态轮询进度（5% → 30% → 75% → 100%），完成后自动刷新
-
-### 2.3 AI 表格提取子系统
-
-#### 架构（最终版，2026-06-15）
+### 2.2 核心数据流
 
 ```
-PDF → Docling (TableFormer: Detection + Structure)
-    → table.data.table_cells (结构化 cell 列表)
-    → 遍历 cells，按 row_offset_idx 排序
-    → column_header? → <th>（蓝底表头）
-    → row_section? → 全宽 <th colspan=n>（紫底段标题，如 "UDA" / "DG"）
-    → row_header? → <td class="text-left font-medium">（方法名列加粗）
-    → col_span / row_span → colspan / rowspan HTML 属性
-    → PyMuPDF 词坐标 Y 聚类 → 子行拆分（独立 <tr> + 虚线分隔 + rowspan 去重）
-    → Tailwind CSS 美化 + 斑马纹
-    → API JSON → 前端 Django 模板渲染
+上传 PDF
+  ↓
+Docling TableFormer 解析 → TableChunk（HTML 表格 + caption + 页码）
+  ↓
+LLM (MiniMax M2) 逐表提取
+  ├─ records: [{benchmark, model, dataset, metric, value}, ...]
+  ├─ tags: {datasets: [...], tasks: [...]}
+  ├─ is_experimental: true/false
+  └─ filter_reason: "数据集统计信息" / "非实验对比表格"
+  ↓
+归一化：benchmark 别名 + dataset 变体合并 + 噪声过滤
+  ↓
+ExperimentRecord 入库（关联 TableChunk + Paper）
+  ↓
+排行榜：按 (benchmark, dataset) 分组 → 按指标排名
 ```
 
-#### 关键技术决策
+### 2.3 已清理的废弃模块
 
-| 决策 | 选型 | 原因 |
-|:---|:---|:---|
-| 表格结构识别 | Docling TableFormer（内置） | PubTables-1M 训练，生产级，96.75% TEDS |
-| 表头语义分类 | `column_header` / `row_header` / `row_section` | TableFormer 模型推理结果，非规则 |
-| 段标题检测 | `row_section` bool | 模型直接标识（如 "UDA" / "DG"） |
-| colspan/rowspan | `col_span` / `row_span` 字段 | TableFormer 原生输出 |
-| 子行拆分 | PyMuPDF 词坐标 Y 聚类 + 行级一致性检查 | 解决 TableFormer 将多物理子行合并为一逻辑行的问题 |
-| 全局框架 | Docling | caption 提取 + Appendix 过滤 + bbox 定位 |
-
-#### 子行拆分机制
-
-TableFormer 有时将 PDF 中多个物理子行（如 Method 列有 "Source Only" 和 "TA3N" 两行）合并为一个逻辑行。解决方案：
-
-1. **触发条件**：cell 内含 ≥2 个独立数值（排除 "▲ +X.Y" 增量注释）
-2. **Y 聚类**：在 cell bbox 内用 PyMuPDF `get_text("words")` 按 Y 坐标聚类（gap > 4pt → 新子行）
-3. **一致性检查**：同一行内 ≥70% 的多数值 cell 呈现相同簇数时才认定子行存在
-4. **渲染**：每个子行为独立 `<tr>`，第二个子行起加 `border-t border-dashed border-gray-300`
-5. **rowspan 优化**：内容在所有子行中相同的 cell 用 `rowspan=n` 跨行，不重复渲染
-6. **去重**：自然 Y 聚类或强制复制后，若所有子行文本相同 → 只保留一份
-
-#### 验证结果（2026-06-15）
-
-3 篇论文 26 张表：
-
-| 论文 | 表数 | col_header | row_section | 子行拆分 | 误伤 |
-|:---|:---|:---|:---|:---|:---|
-| EgoVideo | 10 | ✅ | N/A | 0（无子行表） | 0 |
-| DG/SeqDG | 8 | ✅ | ✅ UDA/DG | 3 表 / 18 行 | 0 |
-| EgoVLP | 8 | ✅ | N/A | 0（无子行表） | 0（之前 123 误拆全部修正） |
-
-#### 已知局限
-
-1. **子行拆分粒度**：仅检测同 cell 内多数值 → Y 聚类。若 PDF 中仅文本 cell 有子行但无数值 cell 对应（极罕见），不会触发拆分。
-2. **row_section 依赖模型**：若 TableFormer 未识别某段标题行，不会渲染为紫色横条。
-3. **header cell 文本对齐**：TableFormer 的 cell.text 来自内部 OCR/文字对齐管线，极少数情况可能有 artifacts（如 ✓ 被识别为 `!`）。
-
-#### 代码位置
-
-`services/docling_service.py` (369 行) — 8 个函数
+| 旧模块 | 原因 |
+|:---|:---|
+| TableImage（PDF 表格截图） | Docling HTML 渲染完全替代 |
+| compare.html + 对比视图 | 排行榜完全替代 |
+| Article 页 records 编辑区 | 冗余信息，LLM 抽取质量已足够 |
+| latex_service / pdf_service / table_extractor / marker_service / parser_service / md_parser / table_transformer_service / table_extraction_v2 | 旧提取方案，Docling 单一路线已稳定 |
 
 ---
 
-## 3. 技术架构（实际落地）
+## 3. 技术架构
 
 | 组件 | 选型 | 说明 |
 |:---|:---|:---|
-| **后端框架** | Django 4.2 | 快速开发，内置 Admin 方便直接在后台改数 |
-| **数据库** | SQLite | 个人工具，单文件易备份，查询性能足够 |
-| **PDF 表格提取** | Docling (TableFormer) + PyMuPDF (子行拆分) | 生产级表格结构识别 |
-| **LLM** | MiniMax M2（可在 `benchhub/settings.py` 替换为 OpenAI/Anthropic） | 实验数据元组抽取 |
-| **前端** | Tailwind CSS (CDN) + Alpine.js (CDN) + pdf.js (CDN) + markdown-it (CDN) | 极简开发，无构建步骤 |
+| **后端框架** | Django 4.2 | 快速开发，内置 Admin |
+| **数据库** | SQLite | 个人工具，单文件易备份 |
+| **PDF 表格提取** | Docling (TableFormer) + PyMuPDF (子行拆分) | PubTables-1M 训练，96.75% TEDS |
+| **LLM** | MiniMax M2（可在 `llm_service.py` 替换） | 逐表 JSON 抽取 + 表格分类 |
+| **前端** | Tailwind CSS (CDN) + Alpine.js (CDN) + pdf.js (CDN) | 极简开发，无构建步骤 |
+| **排行榜排序** | Alpine.js 客户端排序 | 点击列头即时排序，无页面刷新 |
 
 ---
 
-## 4. 核心数据模型 (models.py)
-
-```python
-class Session(models.Model):
-    """研究项目 / 对比会话。每个 session 内的论文与对比相互独立。"""
-    name = models.CharField(max_length=100)
-    description = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-class Paper(models.Model):
-    session = models.ForeignKey(Session, on_delete=CASCADE, related_name='papers')
-    title = models.CharField(max_length=500)
-    arxiv_id = models.CharField(max_length=50, blank=True)
-    local_pdf = models.FileField(upload_to='papers/')
-    raw_markdown = models.TextField(blank=True)
-    status: PENDING | EXTRACTING | CALLING_LLM | COMPLETED | FAILED
-    progress_message / error_message
-    created_at
-
-class ExperimentRecord(models.Model):
-    """一条具体的实验数据"""
-    paper (FK) → table_chunk (FK, nullable) → table_image (FK, nullable)
-    benchmark, dataset, model_name, metric, value
-    is_verified
-
-class TableChunk(models.Model):
-    """Docling 提取的单张表格 HTML（主路径）"""
-    paper (FK) / table_n / sub_table_index / page
-    caption / markdown_text          # markdown_text 存储 HTML 快照
-    cells_json / header_json / bbox_json  # bbox_json 含 html + rows + cols
-    extraction_method: docling | camelot_stream | camelot_lattice | pymupdf_find_tables | pymupdf4llm
-    parent_table_n (nullable)
-
-class TableImage(models.Model):
-    """PDF 表格截图（旧的横线聚类路线）"""
-    paper (FK) / page_number / image / caption
-    order / selected_for_compare
-    created_at
-```
-
-**关键关系**：`ExperimentRecord.table_chunk` 将每条实验数据关联回来源表格，方便校对时按表分组展示。
-
----
-
-## 5. 使用流程
-
-1. **创建项目**：首页点 "+ 新建项目"，填写项目名和描述
-2. **上传论文**：项目页 `/projects/<id>/` 点 "+ 上传论文"，选 PDF 上传 → **自动在后台启动表格提取**
-3. **等待解析**：页面显示状态进度条（待解析 → 提取中 → 调用 LLM → 已完成/失败）
-4. **校对数据**：`/articles/<id>/` 上半部分展示提取的 HTML 表格，下半部分为 record 编辑器
-   - 修改任意单元格自动保存
-   - 点击"全部校验"批量标记
-   - "合并指标"面板，把 `Accuracy` 和 `Acc` 等近义指标合并
-5. **重新解析**：项目页每篇论文有"重新解析"按钮，点击后显示实时进度条，完成后自动刷新
-6. **生成对比表**：`/projects/<id>/compare/` 勾选论文 → 按 Benchmark 分块渲染 → 复制 LaTeX
-
----
-
-## 6. 目录结构
+## 4. 目录结构
 
 ```
-benchhub/              # Django 工程配置
-papers/                # 业务 app：models / views / urls / tasks / admin / migrations
-services/              # 核心服务
-  docling_service.py   # Docling/TableFormer 表格提取 + 子行拆分（主引擎，369 行）
-  llm_service.py       # LLM 调用 + JSON 解析（单表抽取）
-  table_extractor.py   # PDF 表格截图
-  latex_service.py     # LaTeX 生成
-  md_parser.py         # pymupdf4llm 表格切分（camelot 旧路径 fallback）
-  pdf_service.py       # pypdf 文本提取
-  parser_service.py    # Markdown 表格规则解析
-  marker_service.py    # Marker 封装（保留，不主用）
-templates/             # HTML 模板
-media/                 # 上传的 PDF + 表格截图
+BenchHub.md            # 本文件
+README.md              # 项目简介
+manage.py              # Django 入口
+benchhub/              # Django 工程配置 (settings / urls / wsgi)
+papers/                # 业务 app
+  models.py            # Session / Paper / ExperimentRecord / TableChunk
+  views.py             # 项目/论文/排行榜视图
+  urls.py              # 路由（24 条，精确可控）
+  tasks.py             # 异步解析 pipeline（表格提取 + LLM 抽取）
+  admin.py             # Django Admin 注册
+  templatetags/        # 自定义模板过滤器 (dict_key / score)
+  migrations/          # 数据库迁移（含 0010 tags / 0011 清理 TableImage）
+services/              # 核心引擎（仅 2 个文件）
+  docling_service.py   # Docling TableFormer 表格提取 + 子行拆分（~370 行）
+  llm_service.py       # LLM 逐表抽取 + benchmark/dataset 归一化（~380 行）
+templates/             # 模板
+  base.html            # 基础布局 + Tailwind/Alpine.js/markdown-it CDN
+  papers/
+    leaderboard_list.html      # 排行榜卡片列表
+    leaderboard_detail.html    # 排行榜排名表（Alpine.js 客户端排序）
+    review.html                # 论文表格预览（可折叠 + 过滤标记）
+    session_detail.html        # 项目详情（论文列表 + 排行榜入口）
+    upload.html                # PDF 上传
+    ...                        # 项目增删改表单
+media/                 # 上传的 PDF 文件
 ```
 
 ---
 
-## 7. 版本历史
+## 5. 重难点总结
 
-### 表格提取方案演进
+### 5.1 PDF 表格结构识别
+
+**难点**：学术论文表格结构复杂 — 多行表头、colspan/rowspan、段标题行（UDA/DG）、无横线分隔的子行。早期方案（Table Transformer 坐标映射 → 6 层变换，累积误差 10-20px；纯 PyMuPDF 词坐标聚类 → 阈值一刀切，子列混淆）均失败。
+
+**方案演进**：V1-V4 经历 4 次推倒重来，最终 V5 采用 Docling TableFormer 原生结构化数据（`table_cells`，含 column_header / row_section / col_span / row_span 语义标记）直接遍历生成 HTML，搭配 PyMuPDF 词坐标 Y 聚类做子行拆分。
+
+**验证**：3 篇论文 26 张表，0 误伤，0 重复。
+
+### 5.2 子行拆分
+
+**难点**：TableFormer 将 PDF 中无横线分隔的两个物理行（如 Method 列有 "Source Only" + "TBN-TRN" 两行）识别为一个逻辑行，导致 HTML 渲染时数据挤在同一 `<tr>` 中。
+
+**方案**：在 cell bbox 内用 PyMuPDF `get_text("words")` 按 Y 坐标聚类（gap > 4pt → 新子行），同一行内 ≥70% 多数值 cell 呈现相同簇数时才认定子行。每个子行渲染为独立 `<tr>`，内容相同的 cell 用 `rowspan=n` 跨行去重。
+
+### 5.3 LLM 表格语义分类
+
+**难点**：论文中除了实验对比表，还有数据集统计表、消融实验说明表、参数量对比表等。需要自动识别哪些表可以构建排行榜。
+
+**方案**：在 LLM prompt 中增加 `is_experimental` 布尔字段 + `filter_reason` 中文说明。非实验表提取后自动折叠，显示过滤原因（如 "数据集统计信息"），用户可手动展开。
+
+### 5.4 Benchmark/Dataset 名称归一化
+
+**难点**：LLM 返回的名称不统一 — 同一 Benchmark 被写成 "Action Recognition"、"Action Classification"、"EPIC-KITCHENS-100"；同一数据集 EPIC-KITCHENS 有 20+ 种变体（-100/-Test/-Val/-Verb/-Noun/-Action 等自由组合）。
+
+**方案**：`llm_service.py` 内置别名映射表（`_normalize_benchmark`）和正则归一化规则（`_normalize_dataset`：任意 EPIC-KITCHENS-* → EPIC-KITCHENS，EK/EK100 → EPIC-KITCHENS），加上噪声黑名单（"val"/"test"/"overall" 等裸名称）。跨论文后验证：Session 2 从 24 组 → 11 组合并。
+
+### 5.5 LLM 提取稳定性与增量策略
+
+**难点**：LLM 同一张表两次调用可能返回不同数量的 records（因为 LLM 有随机性），直接全量覆盖会丢失之前已提取的其他表数据。
+
+**方案**：`extract_llm_from_chunks()` 采用逐表增量策略 — 仅当该 TableChunk 尚无 records 时才写入，避免覆盖已有数据。同时保留 `table_chunk_id` FK 关联，排行榜可按表回溯。
+
+### 5.6 同一页多表 caption 误匹配
+
+**难点**：Dong 论文 page 7 有 5 张表（Table 3-7），Docling 未提取到 caption 时，PyMuPDF 在表格上下方搜索 "Table N:"，搜索区域覆盖了上方表的 caption，导致 Table 7 显示 Table 6 的标题。
+
+**方案**：`_search_caption_bidirectional` 改为仅搜索表格**上方** 120pt 区域，取最后一个匹配（Y 坐标最靠近表格顶部的 caption），避免误匹配后方表格的标题。
+
+### 5.7 跨 Session 排行榜隔离
+
+**难点**：不同项目（Session）的论文数据需要独立汇聚，不能混淆。
+
+**方案**：排行榜视图接收 `session_id` 参数，所有 query 加 `paper__session=session` 过滤。排行榜页面 URL 嵌入 Session ID（`/projects/<id>/leaderboards/`），列表和详情页自动限定范围。
+
+### 5.8 JSON 嵌入 HTML 的安全问题
+
+**难点**：Alpine.js 客户端排序需要将 Python dict 序列化为 JS 对象。直接用 `{{ json|safe }}` 嵌入 HTML 属性时，模型名中的 `&`（如 "Pos &Neg"）被浏览器误解析为 HTML 实体，导致 JS 解析失败。
+
+**方案**：改使用 Django 的 `json_script` 模板过滤器，将数据嵌入 `<script type="application/json">` 标签中，`&` 自动转义为 `&`，完全安全。
+
+---
+
+## 6. 版本历史
+
+### 数据提取方案演进
 
 | 版本 | 方案 | 结果 |
 |:---|:---|:---|
 | V1 | Table Transformer 坐标映射（6 层变换） | ❌ 累积误差 10-20px |
 | V2 | 纯 PyMuPDF 词坐标聚类（header-template + Y 聚类） | ⚠️ 阈值一刀切，子列混淆 |
 | V3 | Docling 完整管线（计划 50 行胶水代码） | ⚠️ 落地时被绕过 |
-| V4 | Docling bbox + PyMuPDF 坐标重建表格（`_rebuild_table` ~95 行） | ⚠️ 丢弃 TableFormer 结构数据 |
-| **V5 (当前)** | **Docling `table.data.table_cells` 直接遍历 + 子行拆分** | ✅ **3 论文 26 表，0 误伤，0 重复** |
+| V4 | Docling bbox + PyMuPDF 坐标重建表格 | ⚠️ 丢弃 TableFormer 结构数据 |
+| **V5 (当前)** | **Docling table_cells 直接遍历 + 子行拆分** | ✅ **3 论文 26 表，0 误伤** |
 
-### 关键清理
+### 架构关键清理
 
-- **2026-06-15**：删除 `services/structured_parser.py`（~788 行，camelot×2 + PyMuPDF + pymupdf4llm 四级提取器 + colspan/rowspan 反推 + 段标题识别 + 子表合并 + LLM 文本序列化）。此系统与 docling_service 功能重叠，且底层模型相同（TableFormer）。删除后净减少约 850 行代码。
-- **2026-06-15**：删除 `llm_service.py` 中的 `STRUCTURED_PROMPT`（24 行）和 `extract_from_structured_text()`（22 行），仅 structured_parser 管线使用。
-- **2026-06-15**：前端删除"🤖 AI 表格提取"按钮及相关 Alpine.js 组件。表格提取在上传/重试时自动执行，结果持久化在 TableChunk 中，文章页直接从数据库加载。
+- **2026-06-15**：删除 `services/structured_parser.py` (~788 行) — 与 docling_service 功能重叠
+- **2026-06-15**：删除 `llm_service.py` 中 STRUCTURED_PROMPT + extract_from_structured_text — structured_parser 配套代码
+- **2026-06-15**：删除 compare.html + 5 个对比相关视图 + toggle_table_compare — 排行榜替代
+- **2026-06-15**：删除 article 页 records 编辑区（updateRecord/deleteRecord/verifyAll/mergeMetrics）— 冗余信息
+- **2026-06-15**：删除 TableImage 模型 + 截图管线 — Docling HTML 替代
+- **2026-06-15**：删除 6 个废弃 service 文件（latex/pdf/table_extractor/marker/parser/md_parser/table_transformer/table_extraction_v2）— 旧方案残留
+- **2026-06-15**：集成 LLM 自动 pipeline（表格提取 → LLM 抽取 → 归一化 → 入库）— 全自动
+- **2026-06-15**：新增排行榜系统（卡片列表 + 多数据集排名表 + Alpine.js 客户端排序 + 中文说明）
+- **2026-06-15**：新增 Benchmark/Dataset 归一化 + 噪声过滤 + 表格分类（is_experimental）
