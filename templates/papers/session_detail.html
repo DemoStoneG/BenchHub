@@ -16,12 +16,12 @@
         <p class="text-sm text-gray-500 mt-1">创建于 {{ session_obj.created_at|date:"Y-m-d H:i" }}</p>
     </div>
     <div class="flex space-x-2">
+        <a href="/projects/{{ session_obj.id }}/leaderboards/"
+            class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">
+            🏆 排行榜
+        </a>
         <a href="/projects/{{ session_obj.id }}/upload/" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
             + 上传论文
-        </a>
-        <a href="/projects/{{ session_obj.id }}/compare/"
-            class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
-            对比
         </a>
     </div>
 </div>
@@ -63,7 +63,6 @@
                 </div>
                 <div class="ml-4 flex items-center space-x-2" id="paper-actions-{{ paper.id }}">
                     <a href="/articles/{{ paper.id }}/" class="text-gray-400 hover:text-gray-600">查看</a>
-                    <a href="/projects/{{ session_obj.id }}/compare/?papers={{ paper.id }}" class="text-gray-400 hover:text-gray-600">对比</a>
                     <button onclick="retryParse({{ paper.id }})"
                         class="text-orange-600 hover:text-orange-800 text-sm parse-btn">重新解析</button>
                     <button onclick="deletePaper({{ paper.id }}, '{{ paper.title|escapejs }}', this)"

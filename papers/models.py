@@ -47,13 +47,6 @@ class Paper(models.Model):
 
 class ExperimentRecord(models.Model):
     paper = models.ForeignKey(Paper, on_delete=models.CASCADE, related_name='results')
-    table_image = models.ForeignKey(
-        'TableImage',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='records',
-    )
     table_chunk = models.ForeignKey(
         'TableChunk',
         on_delete=models.SET_NULL,
@@ -76,13 +69,7 @@ class ExperimentRecord(models.Model):
 
 
 class TableChunk(models.Model):
-    """从 PDF 结构化提取的单张表格（PyMuPDF find_tables 主路径 + pymupdf4llm fallback）。
-
-    - 同一逻辑大表跨多页 / 跨多子表时共享 table_n，靠 sub_table_index 区分
-    - 段标题行（UDA / DG）单独成 chunk，sub_table_index>=1
-    - 旧 markdown_text 保留为"展示用快照"，find_tables 路径写 Table.to_markdown()，
-      fallback 路径写原 pymupdf4llm MD
-    """
+    """Docling 提取的单张表格 HTML + 元数据。"""
     paper = models.ForeignKey(Paper, on_delete=models.CASCADE, related_name='table_chunks')
     table_n = models.IntegerField()
     sub_table_index = models.IntegerField(default=0)
@@ -95,14 +82,12 @@ class TableChunk(models.Model):
     header_json = models.JSONField(default=list, blank=True)
     bbox_json = models.JSONField(default=dict, blank=True)
 
+    tags = models.JSONField(default=dict, blank=True)
+
     EXTRACTION_CHOICES = [
         ('docling', 'docling'),
-        ('camelot_stream', 'camelot_stream'),
-        ('camelot_lattice', 'camelot_lattice'),
-        ('pymupdf_find_tables', 'pymupdf_find_tables'),
-        ('pymupdf4llm', 'pymupdf4llm'),
     ]
-    extraction_method = models.CharField(max_length=24, choices=EXTRACTION_CHOICES, default='camelot_stream')
+    extraction_method = models.CharField(max_length=24, choices=EXTRACTION_CHOICES, default='docling')
     parent_table_n = models.IntegerField(null=True, blank=True)  # 子表指向所属大表的 table_n
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -115,18 +100,3 @@ class TableChunk(models.Model):
         return f"Paper#{self.paper_id} Table {self.table_n}.{self.sub_table_index} @ p{self.page}"
 
 
-class TableImage(models.Model):
-    """从 PDF 中提取的表格截图，含 caption 与参与对比的标志"""
-    paper = models.ForeignKey(Paper, on_delete=models.CASCADE, related_name='table_images')
-    page_number = models.IntegerField()
-    image = models.ImageField(upload_to='tables/')
-    caption = models.CharField(max_length=500, blank=True)
-    order = models.IntegerField(default=0)
-    selected_for_compare = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['paper', 'page_number', 'order']
-
-    def __str__(self):
-        return f"Paper#{self.paper_id} p{self.page_number} #{self.id}"

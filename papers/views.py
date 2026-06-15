@@ -6,12 +6,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'benchhub.settings')
 
+from collections import defaultdict
+
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 
-from .models import Session, Paper, ExperimentRecord, TableImage, TableChunk
+from .models import Session, Paper, ExperimentRecord, TableChunk
 from .tasks import parse_paper_task
 
 
@@ -137,70 +139,6 @@ def upload(request, session_id):
     return render(request, 'papers/upload.html', {'session_obj': session})
 
 
-def compare(request, session_id):
-    """对比视图（仅展示该 session 内的论文）"""
-    session = get_object_or_404(Session, id=session_id)
-
-    selected_ids = request.GET.getlist('papers')
-    selected_ids = [int(i) for i in selected_ids if i.isdigit()]
-    # 强制只取当前 session 的论文
-    papers_qs = session.papers.all()
-    selected_papers = papers_qs.filter(id__in=selected_ids) if selected_ids else papers_qs.none()
-
-    if not selected_ids:
-        return render(request, 'papers/compare.html', {
-            'session_obj': session,
-            'papers': papers_qs,
-            'selected': [],
-            'models': [],
-            'bench_groups': [],
-            'latex_code': '',
-        })
-
-    records = list(ExperimentRecord.objects.filter(paper__in=selected_papers))
-
-    # 模型集合（取所有论文的并集，每个 benchmark 表都会展示）
-    models = sorted(set(r.model_name for r in records))
-    benchmarks = sorted(set(r.benchmark or '(未指定)' for r in records))
-
-    # 按 benchmark 分组，每个 benchmark 自带 datasets/metrics/records
-    bench_groups = []
-    for bench in benchmarks:
-        bench_records = [r for r in records if (r.benchmark or '(未指定)') == bench]
-        bench_datasets = sorted(set(r.dataset for r in bench_records))
-        bench_metrics = sorted(set(r.metric for r in bench_records))
-        bench_groups.append({
-            'name': bench,
-            'records': bench_records,
-            'datasets': bench_datasets,
-            'metrics': bench_metrics,
-            'dataset_colspan': len(bench_metrics),
-        })
-
-    # LaTeX：每个 benchmark 一段 tabular
-    data = [{
-        'model': r.model_name,
-        'benchmark': r.benchmark,
-        'dataset': r.dataset,
-        'metric': r.metric,
-        'value': r.value
-    } for r in records]
-
-    from services.latex_service import latex_service
-    latex_code = latex_service.generate_tables_by_benchmark(data)
-
-    return render(request, 'papers/compare.html', {
-        'session_obj': session,
-        'papers': papers_qs,
-        'selected': [p.id for p in selected_papers],
-        'selected_papers': selected_papers,
-        'records': records,
-        'models': models,
-        'bench_groups': bench_groups,
-        'latex_code': latex_code,
-    })
-
-
 # ============== Paper 操作 ==============
 
 def paper_status(request, paper_id):
@@ -278,6 +216,7 @@ def _chunk_to_renderable(tc) -> dict:
             'html_content': bbox.get('html', tc.markdown_text),
             'html_rows': bbox.get('rows', 0),
             'html_cols': bbox.get('cols', 0),
+            'tags': tc.tags if isinstance(tc.tags, dict) else {},
         }
 
     # 结构化解析路径（旧 camelot 数据保留兼容）
@@ -319,104 +258,27 @@ def _chunk_to_renderable(tc) -> dict:
         'has_structured': bool(tc.header_json) or bool(body_rows),
         'is_docling_html': False,
         'html_content': '',
+        'tags': tc.tags if isinstance(tc.tags, dict) else {},
     }
 
 
 def paper_detail(request, paper_id):
-    """论文详情：按 TableChunk 分组展示。
-    每组 = 一个 TableChunk（结构化 header/body + records）+ 该 chunk 抽取出的 records。
-    """
+    """论文详情：展示提取的表格，每张表标注提取数据条数。"""
     paper = get_object_or_404(Paper, id=paper_id)
-    records = list(paper.results.all())
     chunks = list(paper.table_chunks.all().prefetch_related('records'))
+    total_records = sum(tc.records.count() for tc in chunks)
 
-    # 按 table_chunk_id 分组
-    records_by_chunk = {}
-    for r in records:
-        key = r.table_chunk_id
-        records_by_chunk.setdefault(key, []).append(r)
-
-    chunk_groups = []  # [{'chunk': dict(renderable), 'records': [...]}]
+    chunk_groups = []
     for tc in chunks:
         chunk_groups.append({
             'chunk': _chunk_to_renderable(tc),
-            'records': records_by_chunk.get(tc.id, []),
+            'records_count': tc.records.count(),
         })
-    unlinked = records_by_chunk.get(None, [])
-    if unlinked:
-        chunk_groups.append({
-            'chunk': None,
-            'records': unlinked,
-        })
-
-    metric_counts = {}
-    bench_counts = {}
-    for r in records:
-        metric_counts[r.metric] = metric_counts.get(r.metric, 0) + 1
-        b = r.benchmark or '(未指定)'
-        bench_counts[b] = bench_counts.get(b, 0) + 1
-    metric_summary = sorted(metric_counts.items(), key=lambda x: -x[1])
-    bench_summary = sorted(bench_counts.items(), key=lambda x: -x[1])
 
     return render(request, 'papers/review.html', {
         'paper': paper,
-        'records': records,
         'chunk_groups': chunk_groups,
-        'metric_summary': metric_summary,
-        'bench_summary': bench_summary,
-        'verified_count': sum(1 for r in records if r.is_verified),
-    })
-
-
-@csrf_exempt
-def toggle_table_compare(request, table_id):
-    """切换某张表格是否参与对比"""
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error'}, status=400)
-    table = get_object_or_404(TableImage, id=table_id)
-    data = {}
-    try:
-        import json
-        data = json.loads(request.body or b'{}')
-    except Exception:
-        pass
-    if 'selected' in data:
-        table.selected_for_compare = bool(data['selected'])
-    else:
-        table.selected_for_compare = not table.selected_for_compare
-    table.save(update_fields=['selected_for_compare'])
-    return JsonResponse({'status': 'ok', 'id': table.id, 'selected': table.selected_for_compare})
-
-
-@csrf_exempt
-def confirm_table_records(request, table_id):
-    """确认某张表下的所有 record（标记为已校验）"""
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error'}, status=400)
-    table = get_object_or_404(TableImage, id=table_id)
-    updated = table.records.filter(is_verified=False).update(is_verified=True)
-    return JsonResponse({'status': 'ok', 'updated': updated, 'table_id': table.id})
-
-
-@csrf_exempt
-def delete_table_group(request, table_id):
-    """删除整张表：先删 record，再删物理图片 + TableImage 行"""
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error'}, status=400)
-    table = get_object_or_404(TableImage, id=table_id)
-    paper_id = table.paper_id
-    records_deleted = table.records.count()
-    table.records.all().delete()
-    try:
-        if table.image:
-            table.image.delete(save=False)
-    except Exception:
-        pass
-    table.delete()
-    return JsonResponse({
-        'status': 'ok',
-        'paper_id': paper_id,
-        'records_deleted': records_deleted,
+        'total_records': total_records,
     })
 
 
@@ -434,117 +296,134 @@ def serve_pdf(request, paper_id):
     return response
 
 
-# ============== Record 操作 ==============
+# ============== 排行榜 ==============
 
-@csrf_exempt
-def update_record(request, record_id):
-    if request.method == 'POST':
-        import json
-        data = json.loads(request.body)
-        record = get_object_or_404(ExperimentRecord, id=record_id)
+# Benchmark 任务说明（中文）
+BENCHMARK_DESCRIPTIONS = {
+    'Action Recognition': '动作识别：给定一段视频，判断其中人物正在执行的动作类别（如切菜、开门）。EPIC-KITCHENS 数据集按 Verb（动词）、Noun（名词）、Action（动作）三个维度评估。',
+    'UDA': 'UDA（无监督领域自适应）：在源域（如特定厨房）训练模型，在目标域（不同的厨房/场景）测试，考察模型跨场景泛化能力。',
+    'DG': 'DG（领域泛化）：类似 UDA，但目标域完全不可见，模型在训练时不能接触任何目标域数据，更贴近真实部署场景。',
+    'Multi-Instance Retrieval': '多实例检索：给定一段文本描述，从视频库中检索出与之匹配的视频片段。评估指标为 mAP 和 nDCG。EPIC-KITCHENS 下有 V2T（视频检索文本）和 T2V（文本检索视频）两个子任务。',
+    'Video-Text Retrieval': '视频-文本检索：衡量模型将视频内容与自然语言描述对齐的能力。与 Multi-Instance Retrieval 类似但侧重不同评估协议。',
+    'NLQ': 'NLQ（自然语言查询）：给定一句自然语言问题（如"他刚才拿了什么？"），模型需在视频中定位答案片段。评估指标为 R@1 和 R@5（IoU 阈值）。',
+    'Moment Query': '时刻查询：给定一个时间范围描述，模型需在长视频中精确定位对应片段。评估 R@1/R@5 和 mAP（多个 IoU 阈值）。',
+    'Object State Change Classification': '物体状态变化分类：判断视频中物体状态是否发生变化（如瓶子从满→空），属细粒度时序理解任务。',
+    'Long-term Action Anticipation': '长期动作预测：根据已观察的视频前缀，预测未来会发生的一系列动作及其时间点，属预测性任务。',
+    'EgoMCQ': 'EgoMCQ（自监督视频-文本匹配）：通过对比学习判断视频片段与文本描述的匹配程度，包含 Intra-video（同视频内）和 Inter-video（跨视频）两种负样本策略。',
+    'Ego4D Moment Retrieval': 'Ego4D 时刻检索：在 Ego4D 大规模第一人称视频数据集上根据文本查询定位时刻片段。',
+    'Active Speaker Localization': '活跃说话人定位：在多说话人场景中识别当前正在说话的人，评估 mAP。',
+    'ASL': 'ASL（自监督学习任务）：评估自监督预训练模型在下游任务上的迁移能力。',
+    'Egocentric Action Recognition': '第一人称动作识别：与 Action Recognition 相同任务，但特指第一人称视角（穿戴相机）场景。',
+}
 
-        if 'benchmark' in data:
-            record.benchmark = data['benchmark']
-        record.dataset = data.get('dataset', record.dataset)
-        record.model_name = data.get('model_name', record.model_name)
-        record.metric = data.get('metric', record.metric)
-        record.value = float(data.get('value', record.value))
-        record.is_verified = data.get('is_verified', record.is_verified)
-        record.save()
-
-        return JsonResponse({'status': 'ok'})
-
-    return JsonResponse({'status': 'error'}, status=400)
-
-
-def delete_record(request, record_id):
-    if request.method == 'POST':
-        record = get_object_or_404(ExperimentRecord, id=record_id)
-        record.delete()
-        return JsonResponse({'status': 'ok'})
-
-    return JsonResponse({'status': 'error'}, status=400)
-
-
-def add_record(request, paper_id):
-    if request.method == 'POST':
-        import json
-        data = json.loads(request.body)
-        paper = get_object_or_404(Paper, id=paper_id)
-
-        record = ExperimentRecord.objects.create(
-            paper=paper,
-            benchmark=data.get('benchmark', ''),
-            dataset=data.get('dataset', ''),
-            model_name=data.get('model_name', ''),
-            metric=data.get('metric', ''),
-            value=float(data.get('value', 0.0)),
-            is_verified=True
-        )
-
-        return JsonResponse({'id': record.id, 'status': 'ok'})
-
-    return JsonResponse({'status': 'error'}, status=400)
+# 描述无法覆盖的 benchmark 时，自动从关联的 TableChunk caption 中提取说明
+def _get_benchmark_description(bench_name: str) -> str:
+    """获取 Benchmark 的文字说明：优先匹配预定义描述 -> 抓一条 TableChunk caption 作为兜底。"""
+    desc = BENCHMARK_DESCRIPTIONS.get(bench_name, '')
+    if desc:
+        return desc
+    # 从所有该 Benchmark 的 TableChunk 中取第一条 caption 作为参考
+    tc = TableChunk.objects.filter(records__benchmark=bench_name).first()
+    if tc and tc.caption:
+        return f'(从论文 caption 中自动提取) {tc.caption[:200]}'
+    return ''
 
 
-@csrf_exempt
-def verify_all_records(request, paper_id):
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error'}, status=400)
+def leaderboard_list(request, session_id):
+    """排行榜列表：按 Benchmark 分组，每组建一张卡片。点击进入包含多个数据集排名表的详情页。"""
+    session = get_object_or_404(Session, id=session_id)
 
-    paper = get_object_or_404(Paper, id=paper_id)
-    updated = paper.results.filter(is_verified=False).update(is_verified=True)
-    return JsonResponse({'status': 'ok', 'updated': updated})
+    records = ExperimentRecord.objects.select_related('paper', 'table_chunk').filter(
+        paper__session=session
+    )
 
-
-def extract_tables_api(request, paper_id):
-    """AI 表格提取 API：用 Table Transformer 提取 PDF 中的所有表格，返回 HTML。"""
-    paper = get_object_or_404(Paper, id=paper_id)
-    if not paper.local_pdf or not os.path.exists(paper.local_pdf.path):
-        return JsonResponse({'status': 'error', 'msg': 'PDF 文件不存在'}, status=400)
-
-    try:
-        from services.docling_service import extract_tables as docling_extract
-
-        tables = docling_extract(paper.local_pdf.path)
-        return JsonResponse({'status': 'ok', 'tables': tables})
-    except Exception as e:
-        import traceback
-        return JsonResponse({
-            'status': 'error',
-            'msg': str(e)[:500],
-            'traceback': traceback.format_exc()[-500:],
-        }, status=500)
-
-
-@csrf_exempt
-def merge_metrics(request, paper_id):
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error'}, status=400)
-
-    import json
-    data = json.loads(request.body)
-    target = data.get('target', '').strip()
-    sources = data.get('sources', [])
-
-    if not target or not sources:
-        return JsonResponse({'status': 'error', 'msg': 'target 或 sources 为空'}, status=400)
-
-    paper = get_object_or_404(Paper, id=paper_id)
-    updated = 0
-    skipped = 0
-    for record in paper.results.filter(metric__in=sources):
-        collision = paper.results.filter(
-            model_name=record.model_name,
-            dataset=record.dataset,
-            metric=target
-        ).exclude(id=record.id).exists()
-        if collision:
-            skipped += 1
+    bench_groups = defaultdict(lambda: {'datasets': set(), 'papers': set(), 'models': set(), 'all_records': []})
+    for r in records:
+        bench = r.benchmark.strip()
+        if not bench or bench == '(未指定)':
             continue
-        record.metric = target
-        record.save(update_fields=['metric'])
-        updated += 1
+        g = bench_groups[bench]
+        g['datasets'].add(r.dataset)
+        g['papers'].add(r.paper_id)
+        g['models'].add(r.model_name)
+        g['all_records'].append(r)
 
-    return JsonResponse({'status': 'ok', 'updated': updated, 'skipped': skipped})
+    cards = []
+    for bench in sorted(bench_groups.keys()):
+        g = bench_groups[bench]
+        best = max(g['all_records'], key=lambda r: r.value)
+        metrics = sorted(set(r.metric for r in g['all_records']))
+        cards.append({
+            'benchmark': bench,
+            'dataset_count': len(g['datasets']),
+            'model_count': len(g['models']),
+            'paper_count': len(g['papers']),
+            'metrics': metrics,
+            'best_model': best.model_name,
+            'best_value': best.value,
+            'best_metric': best.metric,
+        })
 
+    return render(request, 'papers/leaderboard_list.html', {
+        'session_obj': session,
+        'cards': cards,
+    })
+
+
+def leaderboard_detail(request, session_id):
+    """排行榜详情：单个 Benchmark 下的所有数据集排名表（可排序）。"""
+    session = get_object_or_404(Session, id=session_id)
+    bench = request.GET.get('benchmark', '').strip()
+
+    if not bench:
+        return render(request, 'papers/leaderboard_detail.html', {
+            'session_obj': session,
+            'error': '缺少 benchmark 参数',
+        })
+
+    records = ExperimentRecord.objects.select_related('paper').filter(
+        paper__session=session,
+        benchmark=bench,
+    )
+
+    if not records.exists():
+        return render(request, 'papers/leaderboard_detail.html', {
+            'session_obj': session,
+            'benchmark': bench,
+            'error': '该 Benchmark 暂无数据',
+        })
+
+    # 按 dataset 分组，每组一个排名表（不排序，交给前端 Alpine.js）
+    by_dataset = defaultdict(list)
+    for r in records:
+        by_dataset[r.dataset].append(r)
+
+    datasets = []
+    for ds_name in sorted(by_dataset.keys()):
+        ds_records = by_dataset[ds_name]
+        all_metrics = sorted(set(r.metric for r in ds_records))
+
+        model_data = defaultdict(lambda: {'metrics': {}})
+        for r in ds_records:
+            m = model_data[r.model_name]
+            m['paper_id'] = r.paper_id
+            m['paper_title'] = r.paper.title
+            m['table_chunk_id'] = r.table_chunk_id
+            m['metrics'][r.metric] = round(r.value, 2) if r.value != int(r.value) else int(r.value)
+
+        models = [{'model': name, **data} for name, data in model_data.items()]
+
+        datasets.append({
+            'name': ds_name,
+            'all_metrics': all_metrics,
+            'default_metric': all_metrics[0] if all_metrics else '',
+            'models': models,
+            'model_count': len(model_data),
+        })
+
+    return render(request, 'papers/leaderboard_detail.html', {
+        'session_obj': session,
+        'benchmark': bench,
+        'datasets': datasets,
+        'description': _get_benchmark_description(bench),
+    })

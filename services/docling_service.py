@@ -27,7 +27,10 @@ def _get_converter() -> DocumentConverter:
 
 
 def _search_caption_bidirectional(pdf_path: str, page_num: int, table, doc) -> str:
-    """Docling 未找到 caption 时，用 PyMuPDF 在表格上下方双向搜索 'Table N:'。"""
+    """Docling 未找到 caption 时，用 PyMuPDF 在表格上方搜索最近的 'Table N:'。
+
+    同一页多表时，只取表格上方最近的那条 caption，避免误匹配前一张表的标题。
+    """
     try:
         import re as _re
         pdf_doc = fitz.open(pdf_path)
@@ -41,15 +44,26 @@ def _search_caption_bidirectional(pdf_path: str, page_num: int, table, doc) -> s
         if not bbox: pdf_doc.close(); return ""
 
         tx0 = bbox.l; ty0 = ph - bbox.t; ty1 = ph - bbox.b
-        search_top = max(0, ty0 - 120); search_bot = min(ph - 1, ty1 + 60)
+
+        # 搜索区域：表格上方 120pt，左右各 40pt
+        search_top = max(0, ty0 - 120)
+        search_bot = min(ph - 1, ty0)  # 只搜表格上方，不含表格本身及下方
         clip = fitz.Rect(max(0, tx0 - 40), search_top, min(page.rect.width, bbox.r + 40), search_bot)
         text = page.get_text("text", clip=clip)
         pdf_doc.close()
 
         if not text: return ""
-        m = _re.search(r'(?:^|\n)\s*(Table\s+\d+[.:][^\n]*)', text, _re.IGNORECASE)
-        if m: return m.group(1).strip()
-        for line in text.split('\n'):
+
+        # 找出所有 "Table N:" 候选，取 Y 坐标最靠近表格顶部（即最后一个）的那条
+        candidates = list(_re.finditer(
+            r'(?:^|\n)\s*(Table\s+\d+[.:][^\n]*)', text, _re.IGNORECASE
+        ))
+        if candidates:
+            return candidates[-1].group(1).strip()
+
+        # 兜底：按行搜索
+        lines = text.strip().split('\n')
+        for line in reversed(lines):
             if _re.search(r'\bTable\s+\d+\b', line, _re.IGNORECASE):
                 return line.strip()[:200]
     except Exception:
