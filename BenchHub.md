@@ -163,7 +163,75 @@ media/                 # 上传的 PDF 文件
 
 ---
 
-## 6. 版本历史
+## 6. 部署说明
+
+### 6.1 一键安装
+
+```bash
+git clone https://github.com/DemoStoneG/BenchHub.git
+cd BenchHub
+cp .env.example .env                        # 编辑 .env 填入 MiniMax API Key
+bash setup.sh                               # 自动：创建 venv → pip install → migrate
+bash start.sh                               # 启动 → http://localhost:8000
+```
+
+### 6.2 手动安装
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+```
+
+### 6.3 配置 LLM
+
+API Key 通过**环境变量**注入，不硬编码在代码中：
+
+```bash
+export MINIMAX_API_KEY='sk-cp-your-key'
+# 或写入 ~/.bashrc 永久生效
+```
+
+也可复制 `.env.example` → `.env` 填入 Key。换 OpenAI / Anthropic 需编辑 `services/llm_service.py`。
+
+### 6.4 开发 + 生产双实例
+
+同一台机器可运行两个独立实例，共享 conda 环境但数据隔离：
+
+```bash
+# 生产实例（数据库独立）
+git clone ~/BenchHub ~/benchhub-app
+cd ~/benchhub-app && bash start.sh 9000     # 端口 9000
+
+# 开发环境
+cd ~/BenchHub && bash start.sh 8000          # 端口 8000
+```
+
+### 6.5 生产环境
+
+`benchhub/settings.py`：
+
+```python
+DEBUG = False
+ALLOWED_HOSTS = ['your-domain.com']
+SECRET_KEY = '<new-random-key>'
+```
+
+换 `gunicorn` / `uWSGI` 代替 `runserver`，配合 nginx 反向代理 + supervisor/systemd 进程守护。
+
+### 6.6 安全注意事项
+
+| 文件 | 是否提交 Git | 说明 |
+|:---|:---|:---|
+| `benchhub/settings.py` | ✅ | API Key 读环境变量，不硬编码 |
+| `.env` | ❌ (`.gitignore`) | 包含真实 API Key |
+| `.env.example` | ✅ | 模板文件，含占位 Key |
+| `db.sqlite3` | ❌ (`.gitignore`) | 本地数据 |
+| `media/` | ❌ (`.gitignore`) | 上传的 PDF |
+
+---
+
+## 7. 版本历史
 
 ### 数据提取方案演进
 

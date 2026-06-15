@@ -296,31 +296,36 @@ Python 3.10+
 SQLite（无额外数据库依赖）
 ```
 
-### 安装步骤
+### 一键安装（推荐）
 
 ```bash
-# 1. 克隆项目
-git clone <repo-url>
+git clone https://github.com/DemoStoneG/BenchHub.git
 cd BenchHub
+cp .env.example .env          # 编辑 .env 填入 MiniMax API Key
+bash setup.sh                 # 自动：创建 venv → pip install → migrate
+bash start.sh                 # 启动服务器 → http://localhost:8000
+```
 
-# 2. 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
+### 手动安装
 
-# 3. 安装依赖
-pip install django pypdf requests
-pip install docling pymupdf          # 表格提取 + 子行拆分
-pip install pdfplumber pypdfium2 Pillow opencv-python-headless
-
-# 4. 数据库迁移
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 python manage.py migrate
-
-# 5. 配置 LLM（编辑 benchhub/settings.py）
-MINIMAX_API_KEY = 'your-api-key'
-MINIMAX_API_ENDPOINT = 'https://api.minimaxi.com/v1/text/chatcompletion_v2'
-
-# 6. 启动
+export MINIMAX_API_KEY='sk-cp-your-key'   # 或者写入 ~/.bashrc
 python manage.py runserver 0.0.0.0:8000
+```
+
+### 配置 API Key
+
+推荐使用环境变量（不硬编码）：`export MINIMAX_API_KEY='...'` 或复制 `.env.example` → `.env` 填入 Key。换 OpenAI / Anthropic 编辑 `services/llm_service.py` 的 `_call_llm` 方法。
+
+### 开发 + 生产双实例
+
+```bash
+git clone ~/BenchHub ~/benchhub-app    # 生产实例（数据库独立）
+cd ~/benchhub-app && bash start.sh 9000 # 端口 9000
+cd ~/BenchHub && bash start.sh 8000     # 开发环境 8000
 ```
 
 ### 生产部署
@@ -332,7 +337,7 @@ ALLOWED_HOSTS = ['your-domain.com']
 SECRET_KEY = '<new-random-key>'
 ```
 
-建议配合 nginx 反向代理 + supervisor/systemd 进程守护。
+换 `gunicorn` / `uWSGI` 代替 `runserver`，配合 nginx 反向代理 + supervisor/systemd 进程守护。
 
 > 📸 无需截图
 
