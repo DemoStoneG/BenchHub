@@ -31,7 +31,18 @@
         <div class="bg-white shadow rounded-lg overflow-hidden">
             <div class="bg-gray-50 px-5 py-3 flex items-center justify-between border-b">
                 <span class="font-semibold text-gray-800" x-text="'📦 ' + ds.name"></span>
-                <span class="text-xs text-gray-500" x-text="ds.model_count + ' 模型 · ' + ds.all_metrics.length + ' 指标'"></span>
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-500" x-text="ds.model_count + ' 模型 · ' + ds.all_metrics.length + ' 指标'"></span>
+                    <button class="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-500 hover:text-gray-700 hover:border-gray-400 transition"
+                            @click="downloadCsv(ds)">
+                        📥 CSV
+                    </button>
+                    <button class="text-xs px-2 py-1 rounded border border-gray-300 bg-white text-gray-500 hover:text-gray-700 hover:border-gray-400 transition"
+                            :id="'latex-btn-' + ds.name.replace(/[^a-zA-Z0-9]/g, '_')"
+                            @click="copyLatex(ds, $event)">
+                        📋 LaTeX
+                    </button>
+                </div>
             </div>
 
             <div class="overflow-x-auto">
@@ -87,6 +98,54 @@
 {% endif %}
 
 <script>
+window._benchmark = "{{ benchmark|escapejs }}";
+
+function escapeLatex(text) {
+    const map = {
+        '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#',
+        '_': '\\_', '{': '\\{', '}': '\\}',
+        '~': '\\textasciitilde{}', '^': '\\^{}',
+        '\\': '\\textbackslash{}',
+    };
+    return String(text).replace(/[&%$#_{}~^\\]/g, c => map[c] || c);
+}
+
+function generateLatex(ds, benchmark) {
+    const cols = ds.all_metrics.length;
+    const colSpec = 'c l ' + Array(cols).fill('c').join(' ');
+
+    let lines = [];
+    lines.push('\\begin{table}[htbp]');
+    lines.push('  \\centering');
+    lines.push(`  \\caption{${escapeLatex(ds.name)} results on ${escapeLatex(benchmark || '')}}`);
+    lines.push(`  \\begin{tabular}{${colSpec}}`);
+    lines.push('    \\hline');
+
+    // Header row
+    const headerCells = ['#', 'Method', ...ds.all_metrics.map(m => escapeLatex(m))];
+    lines.push('    ' + headerCells.join(' & ') + ' \\\\');
+    lines.push('    \\hline');
+
+    // Body rows (current sort order)
+    ds.sorted.forEach((m, idx) => {
+        const cells = [
+            String(idx + 1),
+            escapeLatex(m.model),
+            ...ds.all_metrics.map(metric => {
+                const val = m.metrics[metric];
+                return val !== undefined ? String(val) : '-';
+            })
+        ];
+        lines.push('    ' + cells.join(' & ') + ' \\\\');
+    });
+
+    lines.push('    \\hline');
+    lines.push('  \\end{tabular}');
+    lines.push('\\end{table}');
+
+    return lines.join('\n');
+}
+
 function leaderboardData() {
     let rawDatasets = JSON.parse(document.getElementById('datasets-data').textContent);
 
@@ -115,10 +174,84 @@ function leaderboardData() {
         });
     }
 
+    function downloadCsv(ds) {
+        // Build CSV rows (exclude 论文 link column, same as LaTeX)
+        const header = ['#', 'Method', ...ds.all_metrics];
+        const rows = [header];
+
+        ds.sorted.forEach((m, idx) => {
+            const cells = [
+                String(idx + 1),
+                m.model,
+                ...ds.all_metrics.map(metric => {
+                    const val = m.metrics[metric];
+                    return val !== undefined ? String(val) : '-';
+                })
+            ];
+            rows.push(cells);
+        });
+
+        // Escape cells for CSV: wrap in quotes if contains comma, quote, or newline
+        const csvRows = rows.map(row =>
+            row.map(cell => {
+                const s = String(cell);
+                if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            }).join(',')
+        );
+
+        // Add BOM for Excel UTF-8 compatibility
+        const bom = '﻿';
+        const csv = bom + csvRows.join('\n');
+
+        // Trigger download
+        const filename = (ds.name.replace(/[^a-zA-Z0-9一-鿿]/g, '_') || 'export') + '.csv';
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function copyLatex(ds, event) {
+        const latex = generateLatex(ds, window._benchmark);
+        const btn = event.target.closest('button');
+        navigator.clipboard.writeText(latex).then(() => {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '✅ 已复制!';
+            btn.classList.add('text-green-600', 'border-green-300');
+            setTimeout(() => {
+                btn.innerHTML = orig;
+                btn.classList.remove('text-green-600', 'border-green-300');
+            }, 1500);
+        }).catch(() => {
+            // Fallback for older browsers
+            const textarea = document.createElement('textarea');
+            textarea.value = latex;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            const orig = btn.innerHTML;
+            btn.innerHTML = '✅ 已复制!';
+            setTimeout(() => { btn.innerHTML = orig; }, 1500);
+        });
+    }
+
     return {
         sortedDatasets: datasets,
         datasetCount: datasets.length,
         toggleSort: toggleSort,
+        downloadCsv: downloadCsv,
+        copyLatex: copyLatex,
     };
 }
 </script>

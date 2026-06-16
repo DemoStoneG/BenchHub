@@ -26,9 +26,12 @@
 | **数据归一化** | Benchmark 名称归一化（别名映射 + 去掉 "on XXX" 后缀）+ Dataset 归一化（EPIC-KITCHENS 全变体合并） | ✅ |
 | **表格预览** | PDF 表格渲染为 HTML 展示，可折叠，非实验表自动折叠 | ✅ |
 | **排行榜列表** | 按项目分组，每个 Benchmark 一张卡片，显示模型数/数据集数/最高分 | ✅ |
-| **排行榜详情** | 单个 Benchmark 下多数据集排名表，客户端 Alpine.js 排序（点击列头 升/降序） | ✅ |
+| **排行榜详情** | 单个 Benchmark 下多数据集排名表，客户端 Alpine.js 排序（点击列头 升/降序），CSV/LaTeX 一键导出 | ✅ |
 | **Benchmark 说明** | 每个排行榜顶部显示中文任务描述 | ✅ |
 | **论文链接定位** | 排行榜中论文链接跳转到对应表格锚点（#tc-<id>） | ✅ |
+| **CSV 导出** | 每个数据集排名表一键下载 CSV（UTF-8 BOM，Excel 兼容） | ✅ |
+| **LaTeX 导出** | 每个数据集排名表一键复制 LaTeX 表格源码（自动转义特殊字符） | ✅ |
+| **Benchmark 自动说明** | 已知任务用预定义描述，新 Benchmark 首次访问 LLM 自动生成中文说明并缓存 | ✅ |
 | **项目页面入口** | 项目页顶部"🏆 排行榜"按钮 | ✅ |
 | **Django Admin** | 后台可编辑 Session / Paper / ExperimentRecord | ✅ |
 | **重新解析** | 项目页点"重新解析"→ 清空旧数据 → 表格提取 → LLM 抽取全自动 | ✅ |
@@ -50,7 +53,7 @@ LLM (MiniMax M2) 逐表提取
   ↓
 ExperimentRecord 入库（关联 TableChunk + Paper）
   ↓
-排行榜：按 (benchmark, dataset) 分组 → 按指标排名
+排行榜：按 (benchmark, dataset) 分组 → 按指标排名 → CSV/LaTeX 一键导出
 ```
 
 ### 2.3 已清理的废弃模块
@@ -71,17 +74,17 @@ ExperimentRecord 入库（关联 TableChunk + Paper）
 | **后端框架** | Django 4.2 | 快速开发，内置 Admin |
 | **数据库** | SQLite | 个人工具，单文件易备份 |
 | **PDF 表格提取** | Docling (TableFormer) + PyMuPDF (子行拆分) | PubTables-1M 训练，96.75% TEDS |
-| **LLM** | MiniMax M2（可在 `llm_service.py` 替换） | 逐表 JSON 抽取 + 表格分类 |
+| **LLM** | MiniMax M2（可在 `llm_service.py` 替换） | 逐表 JSON 抽取 + 表格分类 + Benchmark 自动说明 |
 | **前端** | Tailwind CSS (CDN) + Alpine.js (CDN) + pdf.js (CDN) | 极简开发，无构建步骤 |
 | **排行榜排序** | Alpine.js 客户端排序 | 点击列头即时排序，无页面刷新 |
-
----
+| **数据导出** | 纯前端 JS 生成 CSV / LaTeX | Clipboard API + Blob download，不依赖后端 |
 
 ## 4. 目录结构
 
 ```
 BenchHub.md            # 本文件
 README.md              # 项目简介
+benchmark_descriptions.json  # LLM 自动生成的 Benchmark 说明缓存（不提交 Git）
 manage.py              # Django 入口
 benchhub/              # Django 工程配置 (settings / urls / wsgi)
 papers/                # 业务 app
@@ -161,6 +164,12 @@ media/                 # 上传的 PDF 文件
 
 **方案**：改使用 Django 的 `json_script` 模板过滤器，将数据嵌入 `<script type="application/json">` 标签中，`&` 自动转义为 `&`，完全安全。
 
+### 5.9 Benchmark 描述自动生成
+
+**难点**：排行榜详情页需要为每个 Benchmark 展示中文任务说明。已知任务（UDA、DG 等）可预定义，但新论文引入的新 Benchmark（如 PointingQA、Pose Tracking）无法提前覆盖。
+
+**方案**：三级获取机制 — ① 预定义字典（14 个已知 Benchmark，精心编写）→ ② `benchmark_descriptions.json` 缓存文件（LLM 历史生成结果）→ ③ LLM 实时生成（聚合数据集名、指标名、caption 作为上下文，生成 1-2 句中文说明，自动写入缓存）。新 Benchmark 仅首次访问触发 LLM 调用（~2 秒），后续从缓存秒开。无 API Key 时自动降级为原始 caption 兜底。
+
 ---
 
 ## 6. 部署说明
@@ -226,6 +235,7 @@ SECRET_KEY = '<new-random-key>'
 | `benchhub/settings.py` | ✅ | API Key 读环境变量，不硬编码 |
 | `.env` | ❌ (`.gitignore`) | 包含真实 API Key |
 | `.env.example` | ✅ | 模板文件，含占位 Key |
+| `benchmark_descriptions.json` | ❌ (`.gitignore`) | LLM 自动生成缓存 |
 | `db.sqlite3` | ❌ (`.gitignore`) | 本地数据 |
 | `media/` | ❌ (`.gitignore`) | 上传的 PDF |
 

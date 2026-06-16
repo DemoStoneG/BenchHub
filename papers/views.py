@@ -298,7 +298,10 @@ def serve_pdf(request, paper_id):
 
 # ============== 排行榜 ==============
 
-# Benchmark 任务说明（中文）
+# Benchmark 任务说明缓存文件
+BENCHMARK_CACHE_FILE = Path(__file__).resolve().parent.parent / 'benchmark_descriptions.json'
+
+# 预定义 Benchmark 任务说明（中文）
 BENCHMARK_DESCRIPTIONS = {
     'Action Recognition': '动作识别：给定一段视频，判断其中人物正在执行的动作类别（如切菜、开门）。EPIC-KITCHENS 数据集按 Verb（动词）、Noun（名词）、Action（动作）三个维度评估。',
     'UDA': 'UDA（无监督领域自适应）：在源域（如特定厨房）训练模型，在目标域（不同的厨房/场景）测试，考察模型跨场景泛化能力。',
@@ -316,13 +319,99 @@ BENCHMARK_DESCRIPTIONS = {
     'Egocentric Action Recognition': '第一人称动作识别：与 Action Recognition 相同任务，但特指第一人称视角（穿戴相机）场景。',
 }
 
-# 描述无法覆盖的 benchmark 时，自动从关联的 TableChunk caption 中提取说明
+
+def _load_description_cache() -> dict:
+    """加载持久化的 benchmark 描述缓存（LLM 自动生成的）。"""
+    try:
+        import json
+        if BENCHMARK_CACHE_FILE.exists():
+            with open(BENCHMARK_CACHE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_description_cache(cache: dict):
+    """持久化 benchmark 描述缓存。"""
+    try:
+        import json
+        BENCHMARK_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(BENCHMARK_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _generate_description_via_llm(bench_name: str, bench_records) -> str:
+    """用 LLM 为新 Benchmark 生成中文描述。
+
+    bench_records: QuerySet[ExperimentRecord]，该 benchmark 下的所有记录。
+    聚合数据集名、指标名、一条 caption 作为上下文。
+    """
+    import time
+    datasets = list(dict.fromkeys(r.dataset for r in bench_records if r.dataset))
+    metrics = list(dict.fromkeys(r.metric for r in bench_records if r.metric))
+    first_tc = TableChunk.objects.filter(records__benchmark=bench_name).first()
+    caption = first_tc.caption if first_tc else ''
+
+    context_parts = [f'Benchmark: {bench_name}']
+    if caption:
+        context_parts.append(f'论文表格 caption: {caption[:300]}')
+    if datasets:
+        context_parts.append(f'涉及数据集: {", ".join(datasets[:6])}')
+    if metrics:
+        context_parts.append(f'评估指标: {", ".join(metrics[:8])}')
+
+    prompt = f"""你是一个学术 Benchmark 说明助手。请根据以下信息，用 1-2 句中文简要说明这个 Benchmark 是什么任务。
+
+信息：
+{chr(10).join(context_parts)}
+
+要求：
+- 用中文写，简短（100字以内）
+- 说明这个任务在做什么，评估什么能力
+- 如果信息不足，直接说"该 Benchmark 暂无详细说明"
+- 只输出说明文字，不要加任何前缀"""
+
+    try:
+        from services.llm_service import llm_service
+        content = llm_service._call_llm(prompt)
+        desc = content.strip().strip('"').strip("'").strip()
+        if desc and len(desc) > 5:
+            return desc
+    except Exception:
+        pass
+    return ''
+
+
 def _get_benchmark_description(bench_name: str) -> str:
-    """获取 Benchmark 的文字说明：优先匹配预定义描述 -> 抓一条 TableChunk caption 作为兜底。"""
+    """获取 Benchmark 的中文说明。
+
+    优先级：预定义硬编码 → 缓存文件（LLM 历史生成）→ LLM 实时生成并缓存
+    """
+    # 1. 预定义
     desc = BENCHMARK_DESCRIPTIONS.get(bench_name, '')
     if desc:
         return desc
-    # 从所有该 Benchmark 的 TableChunk 中取第一条 caption 作为参考
+
+    # 2. 缓存文件
+    cache = _load_description_cache()
+    if bench_name in cache:
+        return cache[bench_name]
+
+    # 3. LLM 自动生成
+    bench_records = ExperimentRecord.objects.filter(benchmark=bench_name)
+    if not bench_records.exists():
+        return ''
+
+    desc = _generate_description_via_llm(bench_name, bench_records)
+    if desc:
+        cache[bench_name] = desc
+        _save_description_cache(cache)
+        return desc
+
+    # 4. 最终兜底：取一条 caption
     tc = TableChunk.objects.filter(records__benchmark=bench_name).first()
     if tc and tc.caption:
         return f'(从论文 caption 中自动提取) {tc.caption[:200]}'

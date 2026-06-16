@@ -103,11 +103,13 @@ bash start.sh                    # 启动 → http://localhost:8000
 
 ### 排行榜详情页
 
-- 顶部紫色框是 Benchmark 的中文说明
+- 顶部紫色框是 Benchmark 的中文说明（已知任务硬编码，新任务 LLM 自动生成并缓存）
 - 每个 📦 对应一个数据集，下面是其排名表
 - 点击指标列头 → 排序；再点 → 升/降序切换
 - 紫色数值是当前排序指标
 - 最右列论文链接，点击跳转到对应表格位置
+- 📥 **CSV 下载**：每个数据集表格可一键下载 CSV（UTF-8 BOM，Excel 兼容）
+- 📋 **LaTeX 复制**：每个数据集表格可一键复制 LaTeX `\begin{table}...\end{table}` 源码
 
 ---
 
@@ -121,6 +123,10 @@ echo "export MINIMAX_API_KEY='sk-cp-your-key'" >> ~/.bashrc
 ```
 
 或复制 `.env.example` → `.env` 填入 Key。换 OpenAI / Anthropic 编辑 `services/llm_service.py`。
+
+### Benchmark 自动说明
+
+已知 Benchmark（如 UDA、DG）使用预定义中文描述。上传新论文引入新 Benchmark 时，系统自动调用 LLM 生成 1-2 句中文任务说明，并缓存到 `benchmark_descriptions.json`（不提交 Git）。无需手动维护。
 
 ---
 
