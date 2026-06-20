@@ -1,6 +1,8 @@
 # BenchHub — 个人 AI 论文实验数据智能管理平台
 
-上传 PDF → 自动抽取实验数据 → 构建私有 SOTA 排行榜。对标 [Wizwand](https://www.wizwand.com/sota/action-recognition-on-epic-kitchens-100-test)。
+> 上传 PDF → 自动抽取实验数据 → 构建私有 SOTA 排行榜  
+> 对标 [PapersWithCode](https://paperswithcode.com) · [Wizwand SOTA Leaderboard](https://www.wizwand.com/sota/action-recognition-on-epic-kitchens-100-test)  
+> **让每一位研究者，都拥有自己的 SOTA 排行榜。**
 
 **GitHub**: [DemoStoneG/BenchHub](https://github.com/DemoStoneG/BenchHub)
 
@@ -8,22 +10,51 @@
 
 ## 1. 核心数据流
 
+### 1.1 六步表格提取 Pipeline（Docling + TableFormer）
+
 ```
-上传 PDF
+① DocumentConverter.convert()
+   输入 PDF → IBM Docling 解析 → 输出结构化文档对象（文本段落/图片/表格）
+
+② 过滤 Appendix
+   跳过附录章节中的表格，只保留正文实验表格
+
+③ 提取 Caption
+   优先 Docling 抽取表格标题，失败时 PyMuPDF fallback（仅搜表格上方 120pt）
+
+④ TableFormer 结构化
+   基于 PubTables-1M 训练（TEDS 96.75%），输出每个 cell 的语义标注：
+   column_header（列头）、row_section（段标题）、col_span / row_span（合并单元格）
+
+⑤ _table_cells_to_html()
+   遍历带语义标注的 table_cells，直接渲染为标准 HTML 表格（不做坐标反推）
+
+⑥ 写入 TableChunk
+   封装 HTML + caption + 页码 + 标签，入库供下游 LLM 抽取
+```
+
+### 1.2 LLM 抽取 + 排行榜汇聚
+
+```
+TableChunk（HTML 表格）
   ↓
-Docling TableFormer 解析 PDF 表格 → TableChunk（HTML 表格 + caption + 页码）
-  ↓
-LLM（MiniMax M2，可替换）逐表提取
+LLM 逐表抽取（MiniMax M2，可替换）
   ├─ records: [{benchmark, model, dataset, metric, value}, ...]
   ├─ tags: {datasets: [...], tasks: [...]}
-  ├─ is_experimental: true/false  （非实验表自动折叠不参与排行）
+  ├─ is_experimental: true/false
   └─ filter_reason: "数据集统计信息"
   ↓
-归一化：Benchmark 别名 + Dataset 变体合并 + 噪声过滤
+归一化处理
+  ├─ Benchmark 别名映射 + 去 "on XXX" 后缀
+  ├─ Dataset 20+ 变体归一（EPIC-KITCHENS-* / EK / EK100 → EPIC-KITCHENS）
+  ├─ 小指标排行榜合并进大排行榜
+  └─ 噪声过滤（丢弃裸 val / test / overall）
   ↓
 ExperimentRecord 入库（关联 TableChunk + Paper）
   ↓
-排行榜：按 (Benchmark, Dataset) 分组 → 按指标排名 → CSV / LaTeX 一键导出
+排行榜构建（两层分组）
+  A. 会话级：按项目隔离 → 按 (Benchmark, Dataset) 分组 → 每组计模型数/指标列表/最高分 → 卡片列表
+  B. 明细级：按 Dataset 分组 → Models 纵向展开 + Metrics 横向展开 → 前端排序 + CSV/LaTeX 导出
 ```
 
 ---
@@ -204,7 +235,19 @@ cd ~/BenchHub && bash start.sh 8000     # 开发环境
 
 ---
 
-## 9. FAQ
+## 9. 未来规划：从工具，走向平台
+
+| 阶段 | 目标 | 内容 |
+|:---|:---|:---|
+| **近期** | 完善产品体验 | 增加图表 / 趋势图功能（Plotly / ECharts），横向时间纵向指标，对标 Wizwand；LLM 结果缓存（相同 HTML 不重复调 LLM） |
+| **中期** | 多场景落地 | 覆盖个人研究者、实验室内部多用户（Django + PostgreSQL + Celery）、Web 公开社区（REST API + React/Vue）三类场景 |
+| **长期** | arXiv 自动爬取 | 论文发表即自动上榜，社区编辑 + 批量入库，构建公开 SOTA 数据库 |
+
+**核心理念**：让研究者从"查数 + 敲数"中解放出来，专注于分析结果。
+
+---
+
+## 10. FAQ
 
 **Q: 解析一篇论文多久？**  
 A: 8 页约 2-5 分钟，20 页以上约 5-10 分钟。瓶颈在 LLM 逐表分析。
