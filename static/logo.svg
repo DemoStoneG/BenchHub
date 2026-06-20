@@ -1,0 +1,16 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="logoGrad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <!-- Hexagon = Hub（中心节点），圆角由粗描边 + stroke-linejoin:round 实现 -->
+  <polygon points="50,8 86,29 86,71 50,92 14,71 14,29"
+           fill="url(#logoGrad)" stroke="url(#logoGrad)"
+           stroke-width="12" stroke-linejoin="round"/>
+  <!-- 三根排名柱：低→高，代表 Benchmark 排行 -->
+  <rect x="31" y="50" width="10" height="20" rx="3" fill="white" opacity="0.85"/>
+  <rect x="45" y="40" width="10" height="30" rx="3" fill="white" opacity="0.92"/>
+  <rect x="59" y="30" width="10" height="40" rx="3" fill="white"/>
+</svg>

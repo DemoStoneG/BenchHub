@@ -28,18 +28,36 @@ def session_list(request):
 
     # 每个 session 附加一些统计信息
     session_data = []
+    total_papers = 0
+    total_completed = 0
+    total_records = 0
     for s in sessions:
         papers = s.papers.all()
+        paper_count = papers.count()
+        completed_count = papers.filter(status=Paper.Status.COMPLETED).count()
+        record_count = ExperimentRecord.objects.filter(paper__session=s).count()
+        total_papers += paper_count
+        total_completed += completed_count
+        total_records += record_count
         session_data.append({
             'obj': s,
-            'paper_count': papers.count(),
-            'completed_count': papers.filter(status=Paper.Status.COMPLETED).count(),
-            'record_count': ExperimentRecord.objects.filter(paper__session=s).count(),
+            'paper_count': paper_count,
+            'completed_count': completed_count,
+            'record_count': record_count,
         })
+
+    # 项目色带颜色轮替
+    BAND_COLORS = ['#6366F1', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#EF4444', '#14B8A6']
+    for i, s in enumerate(session_data):
+        s['band_color'] = BAND_COLORS[i % len(BAND_COLORS)]
 
     return render(request, 'papers/session_list.html', {
         'sessions': session_data,
         'q': q,
+        'total_projects': len(session_data),
+        'total_papers': total_papers,
+        'total_completed': total_completed,
+        'total_records': total_records,
     })
 
 
