@@ -4,7 +4,7 @@
 
 **GitHub**: [DemoStoneG/BenchHub](https://github.com/DemoStoneG/BenchHub)
 
-详见 [BenchHub.md](./BenchHub.md) | PPT 大纲: [docs/PPT_OUTLINE.md](./docs/PPT_OUTLINE.md)
+详见 [BenchHub.md](./BenchHub.md)（含技术背景、需求分析、数据流、功能清单、技术难点、部署说明）
 
 ---
 
